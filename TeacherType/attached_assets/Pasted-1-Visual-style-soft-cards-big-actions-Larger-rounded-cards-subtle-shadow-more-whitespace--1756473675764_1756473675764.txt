@@ -1,0 +1,180 @@
+1) Visual style: “soft cards + big actions”
+
+Larger rounded cards, subtle shadow, more whitespace.
+
+Big, high-contrast primary buttons.
+
+Clear section headings with icons.
+
+// Reusable card
+function SectionCard({ title, icon, children, aside }) {
+  return (
+    <section className="rounded-3xl border bg-white/90 shadow-sm p-6 md:p-8 mb-6">
+      <header className="flex items-center justify-between mb-4">
+        <h2 className="text-xl md:text-2xl font-semibold flex items-center gap-2">
+          <span className="text-emerald-600">{icon}</span>{title}
+        </h2>
+        {aside}
+      </header>
+      {children}
+    </section>
+  );
+}
+
+// Reusable primary button
+function PrimaryButton({ children, ...props }) {
+  return (
+    <button
+      {...props}
+      className="w-full md:w-auto px-6 py-3 rounded-2xl bg-emerald-600 hover:bg-emerald-700
+                 text-white font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-300
+                 disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      {children}
+    </button>
+  );
+}
+
+// Secondary button
+function SecondaryButton(props) {
+  return (
+    <button
+      {...props}
+      className="w-full md:w-auto px-6 py-3 rounded-2xl border border-gray-300 bg-white hover:bg-gray-50
+                 text-gray-900 font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-200
+                 disabled:opacity-50 disabled:cursor-not-allowed"
+    />
+  );
+}
+
+
+Use SectionCard to wrap each panel (English→Languages, Kids→English, Quick Actions). Replace long flat containers.
+
+2) Language chips: clearer, tappable “pills”
+
+Make them large with a visible selected state.
+
+Add country flag/emoji for quick scanning.
+
+function LangPill({ active, label, onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-4 py-3 rounded-2xl border text-sm md:text-base transition
+                  ${active
+                    ? "bg-emerald-50 border-emerald-400 text-emerald-800"
+                    : "bg-white border-gray-300 hover:bg-gray-50"}`}
+    >
+      {label}
+    </button>
+  );
+}
+
+3) Textareas and inputs: bigger, calmer
+<textarea
+  className="w-full rounded-2xl border border-gray-300 bg-white p-4 md:p-5 min-h-[120px]
+             focus:outline-none focus:ring-2 focus:ring-emerald-200"
+  placeholder="Type your English message here…"
+/>
+
+4) Mic button states (clear feedback)
+
+Big circular mic when idle; turns red while recording; shows spinner while translating.
+
+function MicButton({ state, onClick }) {
+  // state: "idle" | "listening" | "translating"
+  const label =
+    state === "listening" ? "Listening…" :
+    state === "translating" ? "Translating…" : "Record & Auto-Translate";
+
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full md:w-auto px-6 py-4 rounded-2xl font-medium shadow-sm
+                  ${state === "listening"
+                    ? "bg-red-600 hover:bg-red-700 text-white"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"}`}
+    >
+      {state !== "idle" ? "🎙️ " : "🎤 "}{label}
+    </button>
+  );
+}
+
+5) Detected language: friendly chip with flag + confidence
+function Detected({ code, name, confidence }) {
+  if (!code) return (
+    <div className="text-gray-500 text-sm">Language will appear here after recording…</div>
+  );
+  return (
+    <div className="inline-flex items-center gap-2 rounded-2xl bg-emerald-50 text-emerald-800
+                    border border-emerald-200 px-3 py-2">
+      <span className="text-lg">🌍</span>
+      <span className="font-medium">{name}</span>
+      {confidence != null && <span className="text-xs opacity-80">({Math.round(confidence*100)}%)</span>}
+    </div>
+  );
+}
+
+
+Wire confidence if you read it from the SDK.
+
+6) One-message, ephemeral display (no history)
+
+Show current translation as big “card”.
+
+Fade previous one out so it doesn’t feel like a log.
+
+function TranslationPane({ source, english, fadingOut }) {
+  return (
+    <div className={`rounded-2xl border p-5 bg-blue-50/60 transition-opacity
+                     ${fadingOut ? "opacity-30" : "opacity-100"}`}>
+      <div className="text-sm text-gray-600 mb-1">English Translation</div>
+      <div className="text-lg md:text-xl font-medium">{english || "—"}</div>
+    </div>
+  );
+}
+
+
+When you start a new recording, briefly set fadingOut on the old content, then replace it.
+
+7) Page shell polish
+
+Max width, comfy spacing, subtle background.
+
+function Page({ children }) {
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white">
+      <div className="max-w-6xl mx-auto px-4 md:px-6 py-6 md:py-10">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+8) Optional: quick theme + dark mode toggle
+
+If you want a darker high-contrast option for projectors:
+
+function ThemeToggle({ dark, setDark }) {
+  return (
+    <button
+      onClick={() => setDark(v => !v)}
+      className="px-3 py-2 rounded-xl border bg-white hover:bg-gray-50 text-sm"
+    >
+      {dark ? "☀️ Light" : "🌙 Dark"}
+    </button>
+  );
+}
+
+
+Wrap the <body> or root div with className={dark ? "dark" : ""} and add Tailwind’s dark: variants to key elements.
+
+9) Accessibility tweaks (important for SEN/EAL)
+
+Button labels include verbs (“Record & Auto-Translate”), not just icons.
+
+Focus rings on all interactive elements (focus:ring-2).
+
+16px+ base font, 20–24px for critical info.
+
+Color contrast ≥ 4.5:1 (emerald/blue above meets this).

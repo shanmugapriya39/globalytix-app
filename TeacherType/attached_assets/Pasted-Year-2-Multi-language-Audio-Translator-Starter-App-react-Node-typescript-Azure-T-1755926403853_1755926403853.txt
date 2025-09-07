@@ -1,0 +1,92 @@
+Year 2 Multi‑language Audio Translator – Starter App (react + Node)
+· typescript
+/*
+});
+
+
+// Azure Translator ------------------------------------------------
+app.post('/api/translate', async (req, res) => {
+  const { text, targets, from } = req.body || {};
+  if (!text || !Array.isArray(targets) || targets.length === 0) return res.status(400).json({ error: 'bad input' });
+  try {
+    const params = new URLSearchParams({ 'api-version': '3.0', textType: 'plain' });
+    (from ? params.append('from', from) : params.append('from', 'en'));
+    for (const t of targets) params.append('to', t);
+
+
+    const url = `https://api.cognitive.microsofttranslator.com/translate?${params.toString()}`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Ocp-Apim-Subscription-Key': process.env.AZURE_TRANSLATOR_KEY || ''
+    };
+    if ((process.env.AZURE_TRANSLATOR_REGION || '').trim()) headers['Ocp-Apim-Subscription-Region'] = process.env.AZURE_TRANSLATOR_REGION.trim();
+
+
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify([{ text }]) });
+    const ct = r.headers.get('content-type') || '';
+    const bodyText = await r.text();
+
+
+    if (!ct.includes('application/json')) return res.status(r.status || 502).json({ error: `Translator non‑JSON (${ct})`, providerSnippet: bodyText.slice(0, 200) });
+
+
+    let data; try { data = JSON.parse(bodyText); } catch { return res.status(502).json({ error: 'Translator JSON parse failed', providerSnippet: bodyText.slice(0, 200) }); }
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || 'Translator error', raw: data });
+
+
+    const items = (data?.[0]?.translations || []).map(t => ({ code: t.to, text: t.text }));
+    return res.json({ items });
+  } catch (e) { console.error(e); return res.status(500).json({ error: 'translate failed', detail: String(e) }); }
+});
+
+
+// Azure Speech TTS ------------------------------------------------
+app.post('/api/tts', async (req, res) => {
+  const { items } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'bad input' });
+  try {
+    const out = [];
+    for (const it of items) {
+      const voice = pickVoiceForLang(it.code);
+      const ssml = `<speak version='1.0' xml:lang='${langToBcp47(it.code)}'><voice name='${voice}'>${escapeXml(it.text)}</voice></speak>`;
+      const url = `https://${process.env.AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
+      const r = await fetch(url, { method: 'POST', headers: {
+        'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY || '',
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3'
+      }, body: ssml });
+      const ct = r.headers.get('content-type') || '';
+      if (!r.ok) { const errText = await r.text(); return res.status(r.status).json({ error: 'TTS error', contentType: ct, providerSnippet: errText.slice(0, 200) }); }
+      const buf = Buffer.from(await r.arrayBuffer());
+      out.push({ code: it.code, text: it.text, audioUrl: `data:audio/mpeg;base64,${buf.toString('base64')}` });
+    }
+    return res.json({ items: out });
+  } catch (e) { console.error(e); return res.status(500).json({ error: 'tts failed', detail: String(e) }); }
+});
+
+
+function escapeXml(s='') { return s.replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;','\'':'&apos;'}[c])); }
+function langToBcp47(code) { const map = { 'fa':'fa-IR','es':'es-ES','ar':'ar-EG','lv':'lv-LV','ru':'ru-RU','fr':'fr-FR','nl':'nl-NL','pt':'pt-PT','tr':'tr-TR','zh':'zh-CN','da':'da-DK','it':'it-IT' }; return map[code] || 'en-US'; }
+function pickVoiceForLang(code) { const v = { fa:'fa-IR-DilaraNeural', es:'es-ES-ElviraNeural', ar:'ar-EG-SalmaNeural', lv:'lv-LV-EveritaNeural', ru:'ru-RU-DmitryNeural', fr:'fr-FR-DeniseNeural', nl:'nl-NL-ColetteNeural', pt:'pt-PT-FernandaNeural', tr:'tr-TR-AhmetNeural', zh:'zh-CN-XiaoxiaoNeural', da:'da-DK-ChristelNeural', it:'it-IT-ElsaNeural' }; return v[code] || 'en-US-JennyNeural'; }
+
+
+// SPA fallback for non‑API routes
+app.get(/^(?!\/api\/).*/, (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`API + static running on :${PORT}`));
+
+
+// Self‑test
+if (process.env.SELFTEST) {
+  (function runSelfTests() {
+    const xml = '<?xml version="1.0"?><error><message>Bad key</message></error>';
+    try { JSON.parse(xml); console.error('FAIL: XML parsed as JSON'); } catch { console.log('OK: JSON.parse fails on XML'); }
+  })();
+}
+--- END: server.cjs ---
+*/

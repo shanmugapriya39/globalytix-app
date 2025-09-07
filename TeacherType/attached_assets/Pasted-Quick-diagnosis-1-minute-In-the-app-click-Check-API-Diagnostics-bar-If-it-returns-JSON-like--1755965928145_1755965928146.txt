@@ -1,0 +1,77 @@
+Quick diagnosis (1 minute)
+
+In the app, click Check API (Diagnostics bar).
+
+If it returns JSON like { ok: true, time: ... }, your server is up and reachable.
+
+If it throws the same HTML error, the request is not reaching server.cjs.
+
+Open a new browser tab and go directly to:
+
+/api/health
+
+
+You should see JSON. If you see the app UI or HTML, the frontend is serving the request.
+
+Fix path (Replit “one-server” mode)
+
+On Replit, do this exact flow so the same Express server serves both the built app and /api/*:
+
+Build the frontend
+
+npm run build
+
+
+Start the backend (serves dist/ + /api/*)
+
+node server.cjs
+
+
+Open your Replit URL → click Check API again. It should be JSON now.
+
+If you’re still seeing HTML, it’s usually one of these:
+
+You’re running Vite (npm run dev) instead of node server.cjs.
+
+You didn’t rebuild after changes (missing dist/ or stale build).
+
+The frontend is calling the wrong path (not /api/...). In our code API_BASE defaults to /api, which is correct for one-server.
+
+Belt-and-suspenders hardening (optional but solid)
+
+Add 405 JSON handlers so even a wrong HTTP method won’t leak HTML:
+
+// put this near the top of server.cjs, after app.use(express.json(...))
+app.get('/api/translate', (_req, res) => res.status(405).json({ error: 'Use POST /api/translate' }));
+app.get('/api/tts',       (_req, res) => res.status(405).json({ error: 'Use POST /api/tts' }));
+app.get('/api/mock',      (_req, res) => res.status(405).json({ error: 'Use POST /api/mock' }));
+app.get('/api/stt_translate_to_en', (_req, res) => res.status(405).json({ error: 'Use POST /api/stt_translate_to_en' }));
+
+
+This guarantees you never get index.html for /api/*.
+
+Sanity checks
+
+Visit /api/health → must be JSON.
+
+In DevTools Network tab, click “Generate audio” and check the Request URL:
+
+It should be https://<your-replit-url>/api/translate and method: POST.
+
+Response headers should include content-type: application/json.
+
+If you’d rather keep Vite in dev
+
+Use a proxy so /api/* goes to :3000:
+
+// vite.config.(js|ts)
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: { '/api': { target: 'http://localhost:3000', changeOrigin: true, secure: false } }
+  }
+})

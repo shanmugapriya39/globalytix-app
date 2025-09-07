@@ -1,0 +1,243 @@
+Stack: Vite + React front end, Node + Express back end
+Goal:
+
+Teacher types English → app returns text + audio in selected languages (from the list below).
+
+“Kids → English” path: teacher pastes or speaks a child’s reply in their own language → app returns English (and optional English audio).
+
+Error responses must always be JSON (never HTML/XML) so the frontend never throws “Unexpected token ‘<’”.
+
+Languages (exact codes, keep these)
+
+Persian (Farsi) fa
+
+Spanish es
+
+Arabic ar
+
+Latvian lv
+
+Russian ru
+
+French fr
+
+Dutch nl
+
+Portuguese pt
+
+Turkish tr
+
+Chinese (Simplified) zh-Hans
+
+Danish da
+
+Italian it
+
+Cloud services: Prefer Azure Translator + Azure Speech. (We’ll add STT later; include a stub.)
+Important: Wrap any provider error into JSON; never pass XML/HTML through.
+
+Deliverables
+
+Create these files and contents:
+
+1) server.cjs (Node + Express, CommonJS)
+
+Endpoints:
+
+GET /api/health → { ok: true, time: ISO }
+
+POST /api/mock → {"items":[{code,text,audioUrl},...]} where audioUrl can be empty data URI; used for offline testing.
+
+POST /api/translate
+Input JSON: { "text": "string", "targets": ["es","ar",...], "from": "optional-source-lang" }
+Behavior: call Azure Translator v3.0
+
+URL: https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&textType=plain
+Add from=en when teacher → class; add from=<code> for kids → EN; always append &to=<each target>
+
+Headers:
+
+Content-Type: application/json
+
+Accept: application/json
+
+Ocp-Apim-Subscription-Key: <env>
+
+add Ocp-Apim-Subscription-Region only if AZURE_TRANSLATOR_REGION is set
+
+Body: [{ "text": "<text>" }]
+
+On non-JSON or non-200: return { error: "...", providerSnippet: first 200 chars } with a proper status.
+
+Response shape (always JSON): { "items": [ { "code": "es", "text": "..." }, ... ] }
+
+POST /api/tts
+Input JSON: { "items": [ { "code":"es", "text":"..." }, ... ] }
+Behavior: for each item, call Azure Speech TTS with a safe default voice mapping; return data URI MP3:
+Response: { "items": [ { "code":"es", "text":"...", "audioUrl":"data:audio/mpeg;base64,..." }, ... ] }
+On error, return JSON with error, contentType, providerSnippet.
+
+POST /api/stt_translate_to_en (stub for now)
+
+Accept multipart/form-data file audio and lang (source language). For now do not call any provider. Just return a JSON mock:
+{ "originalLangText": "[stub transcript]", "translatedToEn": "[stub to EN]", "enAudioUrl": "" }
+
+Add helpers:
+
+escapeXml, langToBcp47(code), pickVoiceForLang(code) with solid defaults for the 12 languages.
+
+Use Node 18’s global fetch.
+
+Use cors and dotenv.
+
+Port: process.env.PORT || 3000.
+
+2) vite.config.js (Dev proxy)
+
+Proxy all /api/* to http://localhost:3000 so the frontend never accidentally hits Azure directly.
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: { '/api': { target: 'http://localhost:3000', changeOrigin: true, secure: false } }
+  }
+})
+
+3) src/App.jsx (React)
+
+API_BASE = import.meta.env.VITE_API_BASE || '/api'.
+
+Language picker showing the 12 languages above. Limit selection to 12.
+
+Textarea for English → class, button Generate audio:
+
+POST to ${API_BASE}/translate with {text, targets} (no from → default to en on backend).
+
+Then ${API_BASE}/tts with returned items.
+
+Render cards: language name, translated text, play + download buttons.
+
+Reverse section “Kids → English”:
+
+Dropdown to choose reverseLang.
+
+Textarea for the child’s reply (typed for now).
+
+Button “Translate → EN” calls ${API_BASE}/translate with { text, targets:["en"], from: reverseLang }. Show English result.
+
+Add a disabled “Record 4s & Translate” button that calls ${API_BASE}/stt_translate_to_en for later (keep it visible; it’s fine if it returns the stub).
+
+Robust fetch: postJsonStrict(url, body) that checks content-type, reads text(), parses JSON only when appropriate, and surfaces clear errors with the first 120 chars of non-JSON responses.
+
+Inline red error panel (do not alert). Keep working when one call fails.
+
+4) .env (backend)
+AZURE_TRANSLATOR_KEY=REPLACE_ME
+# optional, only if your subscription requires it
+AZURE_TRANSLATOR_REGION=uae-north
+
+AZURE_SPEECH_KEY=REPLACE_ME
+AZURE_SPEECH_REGION=uae-north
+
+5) package.json scripts
+
+"dev": "vite"
+
+"server": "node server.cjs"
+
+"start": "node server.cjs"
+
+Voice mapping (example)
+
+Use these voices (or closest matches) in pickVoiceForLang:
+
+fa: fa-IR-DilaraNeural
+
+es: es-ES-ElviraNeural (or es-MX-DaliaNeural)
+
+ar: ar-EG-SalmaNeural
+
+lv: lv-LV-EveritaNeural
+
+ru: ru-RU-DmitryNeural
+
+fr: fr-FR-DeniseNeural
+
+nl: nl-NL-ColetteNeural
+
+pt: pt-PT-FernandaNeural (or pt-BR-FranciscaNeural)
+
+tr: tr-TR-AhmetNeural
+
+zh-Hans: zh-CN-XiaoxiaoNeural
+
+da: da-DK-ChristelNeural
+
+it: it-IT-ElsaNeural
+
+Map langToBcp47 accordingly (e.g., zh-Hans → zh-CN).
+
+Tests (must pass)
+
+Backend (manual with curl or HTTP client):
+
+GET /api/health → JSON: { ok: true, time: ... }
+
+POST /api/mock with {"text":"Sit down","targets":["es","ar"]} → JSON with items[0].code === "es", items[1].code === "ar"
+
+POST /api/translate with {"text":"Good morning","targets":["es","ar"]}
+
+If keys invalid: JSON { error: "...", providerSnippet: "..." } (no XML/HTML).
+
+If valid: JSON { items: [{code,text},...] }
+
+POST /api/translate with {"text":"سلام","targets":["en"],"from":"fa"} → JSON { items: [{ code:"en", text:"Hello" (or similar) }] }
+
+POST /api/tts with {"items":[{"code":"es","text":"Buenos días"}]} → JSON with items[0].audioUrl as data:audio/mpeg;base64,...
+
+POST /api/stt_translate_to_en (send any small webm + lang=es) → JSON stub { originalLangText, translatedToEn, enAudioUrl }
+
+Frontend (manual):
+
+Visiting /api/health from the Vite dev server returns JSON (verifies proxy).
+
+Type English, pick 3 languages, Generate → see cards with text, Play works.
+
+Reverse: pick Persian, paste سلام → English text shows.
+
+Error case: stop server and click Generate → red panel shows a clear message (no app crash).
+
+Guardrails
+
+All backend error paths must respond with JSON.
+
+Never parse response as JSON before checking the content-type or inspecting the first character.
+
+Keep UI responsive on error; log to console and show inline message.
+
+Stretch (create stubs but don’t fully implement now)
+
+stt_translate_to_en: file upload handling done; later we’ll add Azure Speech-to-Text and feed result into /api/translate.
+
+Phrase presets and local caching (we’ll add after testing).
+
+Run Instructions (Replit)
+
+Create a Replit Node.js project.
+
+Add files above.
+
+Install: npm i express cors dotenv @vitejs/plugin-react react react-dom
+
+Open two tabs:
+
+Tab A: npm run server
+
+Tab B: npm run dev
+
+Visit the dev URL from Replit; ensure /api/health returns JSON through the dev server (proxy working).
+
+Test with /api/mock first (no keys needed). Then add keys and test live.

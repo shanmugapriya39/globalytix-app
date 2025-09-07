@@ -1,0 +1,234 @@
+/*
+  const { text = '', targets = [] } = req.body || {};
+  const items = targets.slice(0, 12).map(code => ({ code, text: `[${code}] ${text}` }));
+  const out = items.map(it => ({ code: it.code, text: it.text, audioUrl: `data:audio/mpeg;base64,` }));
+  res.json({ items: out });
+});
+
+
+// Azure Translator ------------------------------------------------
+app.post('/api/translate', async (req, res) => {
+  const { text, targets, from } = req.body || {};
+  if (!text || !Array.isArray(targets) || targets.length === 0) return res.status(400).json({ error: 'bad input' });
+  try {
+    const params = new URLSearchParams({ 'api-version': '3.0', textType: 'plain' });
+    (from ? params.append('from', from) : params.append('from', 'en'));
+    for (const t of targets) params.append('to', t);
+
+
+    const url = `https://api.cognitive.microsofttranslator.com/translate?${params.toString()}`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Ocp-Apim-Subscription-Key': process.env.AZURE_TRANSLATOR_KEY || ''
+    };
+    if ((process.env.AZURE_TRANSLATOR_REGION || '').trim()) headers['Ocp-Apim-Subscription-Region'] = process.env.AZURE_TRANSLATOR_REGION.trim();
+
+
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify([{ text }]) });
+    const ct = r.headers.get('content-type') || '';
+    const bodyText = await r.text();
+
+
+    if (!ct.includes('application/json')) return res.status(r.status || 502).json({ error: `Translator non‑JSON (${ct})`, providerSnippet: bodyText.slice(0, 200) });
+
+
+    let data; try { data = JSON.parse(bodyText); } catch { return res.status(502).json({ error: 'Translator JSON parse failed', providerSnippet: bodyText.slice(0, 200) }); }
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || 'Translator error', raw: data });
+
+
+    const items = (data?.[0]?.translations || []).map(t => ({ code: t.to, text: t.text }));
+    return res.json({ items });
+  } catch (e) { console.error(e); return res.status(500).json({ error: 'translate failed', detail: String(e) }); }
+});
+
+
+// Azure Speech TTS ------------------------------------------------
+app.post('/api/tts', async (req, res) => {
+  const { items } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'bad input' });
+  try {
+    const out = [];
+    for (const it of items) {
+      const voice = pickVoiceForLang(it.code);
+      const ssml = `<speak version='1.0' xml:lang='${langToBcp47(it.code)}'><voice name='${voice}'>${escapeXml(it.text)}</voice></speak>`;
+      const url = `https://${process.env.AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
+      const r = await fetch(url, { method: 'POST', headers: {
+        'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY || '',
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3'
+      }, body: ssml });
+      const ct = r.headers.get('content-type') || '';
+      if (!r.ok) { const errText = await r.text(); return res.status(r.status).json({ error: 'TTS error', contentType: ct, providerSnippet: errText.slice(0, 200) }); }
+      const buf = Buffer.from(await r.arrayBuffer());
+      out.push({ code: it.code, text: it.text, audioUrl: `data:audio/mpeg;base64,${buf.toString('base64')}` });
+    }
+    return res.json({ items: out });
+  } catch (e) { console.error(e); return res.status(500).json({ error: 'tts failed', detail: String(e) }); }
+});
+
+
+function escapeXml(s='') { return s.replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;','\'':'&apos;'}[c])); }
+function langToBcp47(code) { const map = { 'fa':'fa-IR','es':'es-ES','ar':'ar-EG','lv':'lv-LV','ru':'ru-RU','fr':'fr-FR','nl':'nl-NL','pt':'pt-PT','tr':'tr-TR','zh':'zh-CN','da':'da-DK','it':'it-IT' }; return map[code] || 'en-US'; }
+function pickVoiceForLang(code) { const v = { fa:'fa-IR-DilaraNeural', es:'es-ES-ElviraNeural', ar:'ar-EG-SalmaNeural', lv:'lv-LV-EveritaNeural', ru:'ru-RU-DmitryNeural', fr:'fr-FR-DeniseNeural', nl:'nl-NL-ColetteNeural', pt:'pt-PT-FernandaNeural', tr:'tr-TR-AhmetNeural', zh:'zh-CN-XiaoxiaoNeural', da:'da-DK-ChristelNeural', it:'it-IT-ElsaNeural' }; return v[code] || 'en-US-JennyNeural'; }
+
+
+// SPA fallback for non‑API routes
+app.get(/^(?!\/api\/).*/, (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`API + static running on :${PORT}`));
+
+
+// Self‑test
+if (process.env.SELFTEST) {
+  (function runSelfTests() {
+    const xml = '<?xml version="1.0"?><error><message>Bad key</message></error>';
+    try { JSON.parse(xml); console.error('FAIL: XML parsed as JSON'); } catch { console.log('OK: JSON.parse fails on XML'); }
+  })();
+}
+--- END: server.cjs ---
+*/
+
+
+
+Love it — you want true live translation while someone is speaking. The right tool is Azure Speech SDK’s TranslationRecognizer with auto-detect. It translates on the fly, no extra HTTP hop.
+
+Below is the minimum you need. Paste it in and it will work with the keys you already set.
+
+1) Backend (token endpoint)
+
+You already have /api/speech/token. If not, add this to server.cjs above the SPA fallback:
+
+app.get('/api/speech/token', async (req, res) => {
+  try {
+    const region = (process.env.AZURE_SPEECH_REGION || '').toLowerCase();
+    const key = process.env.AZURE_SPEECH_KEY || '';
+    if (!region || !key) return res.status(500).json({ error: 'Speech key/region missing' });
+
+    const url = `https://${region}.api.cognitive.microsoft.com/sts/v1.0/issueToken`;
+    const r = await fetch(url, { method: 'POST', headers: { 'Ocp-Apim-Subscription-Key': key } });
+    const token = await r.text();
+    if (!r.ok) return res.status(r.status).json({ error: 'token failed', providerSnippet: token.slice(0,200) });
+
+    res.json({ token, region });
+  } catch (e) { res.status(500).json({ error: 'token exception', detail: String(e) }); }
+});
+
+2) Frontend: add live mode (React)
+a) Loader for the Speech SDK (top of your App file, near imports)
+async function loadSpeechSDK() {
+  if (window.SpeechSDK) return window.SpeechSDK;
+  await new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://aka.ms/csspeech/jsbrowserpackageraw';
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load Speech SDK'));
+    document.head.appendChild(s);
+  });
+  return window.SpeechSDK;
+}
+
+b) State for live mode (inside App() with your other useStates)
+const [live, setLive]       = useState(false); // on/off
+const [liveSrc, setLiveSrc] = useState("");    // running source transcript
+const [liveEn, setLiveEn]   = useState("");    // running English translation
+const [liveMsg, setLiveMsg] = useState("");
+const liveRecRef = React.useRef(null);
+const sdkRef     = React.useRef(null);
+
+c) Helper to create a TranslationRecognizer (below the loader)
+async function makeLiveRecognizer(API_BASE) {
+  const sdk = await loadSpeechSDK();
+  const tok = await getJsonStrict(`${API_BASE}/speech/token`);
+
+  const cfg = sdk.SpeechTranslationConfig.fromAuthorizationToken(tok.token, tok.region);
+  cfg.addTargetLanguage('en');
+  // nicer text & shorter initial silence
+  cfg.setProperty(sdk.PropertyId.SpeechServiceResponse_PostProcessingOption, 'TrueText');
+  cfg.setProperty(sdk.PropertyId.SpeechServiceConnection_InitialSilenceTimeoutMs, '2000');
+
+  const auto = sdk.AutoDetectSourceLanguageConfig.fromLanguages([
+    'fa-IR','es-ES','ar-EG','lv-LV','ru-RU','fr-FR','nl-NL','pt-PT','tr-TR','zh-CN','da-DK','it-IT'
+  ]);
+  const audio = sdk.AudioConfig.fromDefaultMicrophoneInput();
+  const recognizer = new sdk.TranslationRecognizer(cfg, auto, audio);
+  return { sdk, recognizer };
+}
+
+d) Start/stop handlers (inside App())
+async function startLive() {
+  try {
+    setLiveSrc(""); setLiveEn(""); setLiveMsg("");
+    const { sdk, recognizer } = await makeLiveRecognizer(API_BASE);
+    sdkRef.current = sdk;
+    liveRecRef.current = recognizer;
+
+    recognizer.recognizing = (_s, e) => {
+      const en = e.result?.translations?.get('en') || '';
+      setLiveSrc(e.result?.text || '');
+      setLiveEn(en);
+    };
+    recognizer.recognized = (_s, e) => {
+      const en = e.result?.translations?.get('en') || '';
+      if (e.result?.text) setLiveSrc(prev => (prev ? prev + ' ' : '') + e.result.text);
+      if (en) setLiveEn(prev => (prev ? prev + ' ' : '') + en);
+    };
+    recognizer.canceled = (_s, e) => setLiveMsg(`Live canceled: ${e.errorDetails || e.reason}`);
+    recognizer.sessionStopped = () => setLive(false);
+
+    recognizer.startContinuousRecognitionAsync(
+      () => setLive(true),
+      err => { setLiveMsg(String(err)); setLive(false); }
+    );
+  } catch (e) {
+    setLiveMsg(e.message || String(e));
+    setLive(false);
+  }
+}
+
+function stopLive() {
+  const r = liveRecRef.current;
+  if (r) r.stopContinuousRecognitionAsync(()=>{},()=>{});
+  setLive(false);
+}
+
+e) UI buttons + live panels (replace your current blue mic button area)
+<div className="flex gap-3 flex-wrap">
+  <button
+    className={`px-5 py-3 rounded-2xl ${live ? 'bg-red-500' : 'bg-sky-600'} text-white`}
+    onClick={live ? stopLive : startLive}
+  >
+    {live ? '■ Stop Live Translate' : '📡 Record & Live Translate'}
+  </button>
+  {liveMsg && <span className="text-sm opacity-70">{liveMsg}</span>}
+</div>
+
+{live && (
+  <div className="grid gap-2 w-full mt-3">
+    <div className="text-sm opacity-70">Live transcript (auto-detected):</div>
+    <div className="p-3 rounded-xl bg-white border min-h-[48px]">{liveSrc}</div>
+    <div className="text-sm opacity-70 mt-2">Live English:</div>
+    <div className="p-3 rounded-xl bg-blue-50 border min-h-[48px]">{liveEn}</div>
+  </div>
+)}
+
+
+That’s it. Click Record & Live Translate — speech is auto-detected and streamed into English in real time. Click again to stop.
+
+Sanity checklist
+
+/api/speech/token returns JSON. If not, your Speech key/region secret is wrong.
+
+Site is served over https (your Replit URL is). iOS Safari needs a user gesture to start the mic — your button provides it.
+
+If you see “No language selected,” remove any old validation that forced a language. Auto-detect doesn’t need it.
+
+Extras you might want
+
+A “Copy English” button near the live panel.
+
+A “Speak back” button that feeds liveEn into your existing /api/tts to play audio back to the student in their language set — or in English if you prefer.

@@ -1,0 +1,79 @@
+That error means the Speech SDK didn’t receive a region string when you created the config:
+
+SpeechServiceConnection_Region ⇒ tok.region is null/undefined.
+
+Fix it in 3 quick checks. Do all three:
+
+1) Verify the token endpoint actually returns a region
+
+Open this in your browser (same origin as your app):
+
+/api/speech/token
+
+
+Expected JSON
+
+{ "token":"<long string>", "region":"uaenorth" }
+
+
+If you don’t see region or you see HTML/error, fix the server now.
+
+Server code (copy-paste, replace your handler):
+
+// server.cjs  — replace your /api/speech/token with this
+app.get('/api/speech/token', async (req, res) => {
+  try {
+    const raw = (process.env.AZURE_SPEECH_REGION || '').trim();
+    const key = (process.env.AZURE_SPEECH_KEY || '').trim();
+    if (!raw || !key) return res.status(500).json({ error: 'Speech key/region missing' });
+
+    // Normalize for the STS host: 'uae-north' -> 'uaenorth'
+    const hostRegion = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const url = `https://${hostRegion}.api.cognitive.microsoft.com/sts/v1.0/issueToken`;
+
+    const r = await fetch(url, { method: 'POST', headers: { 'Ocp-Apim-Subscription-Key': key } });
+    const body = await r.text();
+    if (!r.ok) return res.status(r.status).json({ error: 'token failed', hostRegion, providerSnippet: body.slice(0,200) });
+
+    // IMPORTANT: return region along with token
+    res.json({ token: body, region: hostRegion });
+  } catch (e) {
+    res.status(500).json({ error: 'token exception', detail: String(e) });
+  }
+});
+
+
+Restart the server after saving.
+
+2) Make the client fail fast if region is missing
+
+Where you build the Speech config:
+
+const tok = await getJsonStrict(`${API_BASE}/speech/token`);
+if (!tok?.region) throw new Error('Speech token missing region from server');
+const speechConfig = sdk.SpeechTranslationConfig.fromAuthorizationToken(tok.token, tok.region);
+
+
+Do the same for TranslationRecognizer if you use it.
+
+3) Double-check your Replit secrets (exact, case-sensitive)
+AZURE_SPEECH_KEY       = <Speech resource Key 1>   // from your *Speech* resource
+AZURE_SPEECH_REGION    = uaenorth                  // no spaces, no dash
+
+
+Common mistake: putting uae-north here or pasting the Translator key in the Speech slot. After changing secrets, stop and start the server so process.env reloads.
+
+Quick self-tests
+
+Visit /api/diag — you should see:
+
+{ "hasSpeechKey": true, "speechRegion": "uaenorth", ... }
+
+
+Visit /api/speech/token — must include both token and region.
+
+Start live mode again.
+
+If /api/speech/token returns that JSON but live mode still throws the same error, it means the client isn’t using tok.region (maybe still passing undefined). Search your code for fromAuthorizationToken( and confirm the second argument is tok.region.
+
+Want me to patch your server.cjs and the client guard in the canvas so you can just rebuild and run?

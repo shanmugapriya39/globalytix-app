@@ -1,0 +1,61 @@
+Open this in your running app:
+
+/api/diag
+
+
+You should see:
+
+{
+  "hasTranslatorKey": true,
+  "translatorRegion": "uaenorth"   // or your value
+  "hasSpeechKey": true,
+  "speechRegionRaw": "uae-north",  // whatever you set
+  "speechRegionNormalized": "uaenorth"
+}
+
+
+If hasSpeechKey is false or speechRegionRaw is null, fix your Secrets.
+
+Double-check your Replit Secrets (exact names, case-sensitive):
+
+AZURE_SPEECH_KEY       = <Speech resource Key 1>
+AZURE_SPEECH_REGION    = uaenorth        // no spaces
+AZURE_TRANSLATOR_KEY   = <Translator resource Key 1>
+AZURE_TRANSLATOR_REGION= uaenorth        // or region you picked
+
+
+Be careful not to paste the Translator key into the Speech slot — they’re different resources.
+
+Restart the server
+
+Stop → Run (or node server.cjs if you’re using the shell).
+
+Quick endpoint test (hits exactly what TTS uses)
+In your browser (or curl) try:
+
+POST /api/tts
+Body:
+{
+  "items": [{ "code": "es", "text": "Hola" }]
+}
+
+
+If it still fails, the JSON you get back will include:
+
+endpoint: the exact hostname it tried
+
+regionRaw and regionNormalized
+
+providerSnippet: first part of Azure’s error message (often “The provided subscription key is invalid or does not match the region”)
+
+Likely root cause in your case
+
+From experience: you set uae-north in Secrets (with a dash) — Azure Speech expects the subdomain without the dash (uaenorth) for the endpoint host. Before, that would produce a DNS error or a 401 if the key/region mismatch. The server now normalizes it automatically, but your key still has to be the Speech key from the Speech resource created in that same region.
+
+Optional hardening (tell me if you want me to add it)
+
+A “Preflight” button in the UI that calls /api/diag and shows the TTS endpoint it will use.
+
+A token check: hit https://<region>.api.cognitive.microsoft.com/sts/v1.0/issueToken with your speech key; if that 401s, we can say with certainty it’s the key/region.
+
+If you paste the JSON from /api/diag and the error payload you now get from /api/tts (with endpoint and providerSnippet), I’ll point out the exact mismatch.

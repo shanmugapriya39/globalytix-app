@@ -1,0 +1,353 @@
+/*
+Year 2 Multi‑Language Audio Translator – PROXY FIX + DIAGNOSTICS
+================================================================
+Why you saw this error
+----------------------
+The frontend tried to call `/api/...` but it was handled by **Vite** (the dev server), which returned **index.html**. That’s why you saw:
+`Expected JSON response, got: <!DOCTYPE html> ... import { createHotContext } from "/@vite/client"`
+
+Fix options (pick one)
+----------------------
+A) Add **Vite proxy** so `/api/*` goes to your Node server on :3000.
+Create `vite.config.js` at project root:
+
+  import { defineConfig } from 'vite'
+  import react from '@vitejs/plugin-react'
+  export default defineConfig({
+    plugins: [react()],
+    server: {
+      port: 5173,
+      proxy: { '/api': { target: 'http://localhost:3000', changeOrigin: true, secure: false } }
+    }
+  })
+
+B) Or set **VITE_API_BASE** to the full backend URL:
+- In Replit → Secrets (Environment Variables): `VITE_API_BASE = http://localhost:3000/api`
+
+This code update adds a visible **Diagnostics bar** with a “Check API” button to confirm the proxy/base URL is correct, and improves error hints when HTML comes back.
+*/
+
+import React, { useMemo, useState } from "react";, { useMemo, useState } from "react";
+
+const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE) || "/api";
+
+// Updated language list
+const LANGUAGE_OPTIONS = [
+  { code: "fa", name: "Persian" },
+  { code: "es", name: "Spanish" },
+  { code: "ar", name: "Arabic" },
+  { code: "lv", name: "Latvian" },
+  { code: "ru", name: "Russian" },
+  { code: "fr", name: "French" },
+  { code: "nl", name: "Dutch" },
+  { code: "pt", name: "Portuguese" },
+  { code: "tr", name: "Turkish" },
+  { code: "zh-Hans", name: "Chinese (Simplified)" },
+  { code: "da", name: "Danish" },
+  { code: "it", name: "Italian" }
+];
+
+async function postJsonStrict(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body ?? {}),
+  });
+  const contentType = res.headers.get("content-type") || "";
+  const text = await res.text();
+
+  // If Vite served index.html, helpfully point it out
+  const looksHtml = text.trim().toLowerCase().startsWith("<!doctype html") || text.includes("/@vite/client");
+  if (looksHtml) {
+    throw new Error(
+      `Expected JSON response, got HTML.
+This usually means your frontend is not reaching the Node API.
+Fix: 1) Add vite proxy for /api to :3000, or 2) set VITE_API_BASE to http://localhost:3000/api.
+Snippet: ${text.slice(0, 120)}`
+    );
+  }
+
+  let data = null;
+  const looksJson = contentType.includes("application/json") || text.trim().startsWith("{") || text.trim().startsWith("[");
+  if (looksJson) {
+    try { data = JSON.parse(text); } catch (e) {
+      throw new Error(`Bad JSON from ${url}. First 120 chars: ${text.slice(0, 120)}`);
+    }
+  } else {
+    throw new Error(`Expected JSON from ${url} but got ${contentType || "unknown"}. First 120 chars: ${text.slice(0,120)}`);
+  }
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || res.statusText;
+    throw new Error(`${url} ${res.status} – ${msg}`);
+  }
+  return data;
+}
+
+async function getJsonStrict(url) {
+  const res = await fetch(url);
+  const contentType = res.headers.get("content-type") || "";
+  const text = await res.text();
+  const looksHtml = text.trim().toLowerCase().startsWith("<!doctype html") || text.includes("/@vite/client");
+  if (looksHtml) throw new Error(`Got HTML from ${url}. Your proxy/base URL is wrong. Snippet: ${text.slice(0,120)}`);
+  if (!contentType.includes("application/json")) throw new Error(`Expected JSON from ${url}, got ${contentType}. Snippet: ${text.slice(0,120)}`);
+  return JSON.parse(text);
+}
+
+function Pill({ active, children, onClick }) {
+  return (
+    <button onClick={onClick} className={`px-3 py-2 rounded-2xl border shadow-sm text-sm transition ${active ? "bg-black text-white" : "bg-white hover:bg-gray-50"}`}>{children}</button>
+  );
+}
+
+function AudioCard({ langName, text, audioUrl, loading, onPlay }) {
+  return (
+    <div className="border rounded-2xl p-4 shadow-sm flex flex-col gap-2">
+      <div className="text-sm opacity-70">{langName}</div>
+      <div className="font-medium break-words">{text || "—"}</div>
+      <div className="flex gap-2">
+        <button className="px-3 py-2 rounded-xl border bg-white hover:bg-gray-50" onClick={onPlay} disabled={!audioUrl || loading} title={audioUrl ? "Play" : "Generate first"}>
+          {loading ? "Loading..." : "▶ Play"}
+        </button>
+        {audioUrl && (<a className="px-3 py-2 rounded-xl border bg-white hover:bg-gray-50" href={audioUrl} download>Download</a>)}
+      </div>
+    </div>
+  );
+}
+
+function DiagnosticsBar() {
+  const [msg, setMsg] = useState("");
+  const [checking, setChecking] = useState(false);
+  return (
+    <div className="border rounded-2xl p-3 bg-gray-50 flex items-center gap-3 text-sm">
+      <button className="px-3 py-2 rounded-xl border bg-white hover:bg-gray-100" onClick={async () => {
+        setChecking(true); setMsg("");
+        try {
+          const data = await getJsonStrict(`${API_BASE}/health`);
+          setMsg(`OK: /health → ${JSON.stringify(data)}`);
+        } catch (e) {
+          setMsg((e?.message || String(e)));
+        } finally { setChecking(false); }
+      }} disabled={checking}>{checking ? "Checking…" : "Check API"}</button>
+      <div className="opacity-70">API_BASE: <code>{API_BASE}</code></div>
+      {msg && <div className="ml-auto px-2 py-1 rounded bg-white border max-w-[60ch] whitespace-pre-wrap">{msg}</div>}
+    </div>
+  );
+}
+
+export default function App() {
+  const [input, setInput] = useState("");
+  const [selected, setSelected] = useState(["ar", "es", "fa"]);
+  const [results, setResults] = useState([]);
+  const [reverseInput, setReverseInput] = useState("");
+  const [reverseLang, setReverseLang] = useState("es");
+  const [reverseResult, setReverseResult] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useMemo(() => {}, [selected]);
+
+  function toggle(code) {
+    setSelected(prev => prev.includes(code) ? prev.filter(c => c !== code) : (prev.length >= 12 ? prev : [...prev, code]));
+  }
+
+  async function generate() {
+    setBusy(true); setError(""); setResults([]);
+    try {
+      const tr = await postJsonStrict(`${API_BASE}/translate`, { text: input.trim(), targets: selected });
+      if (!tr || !Array.isArray(tr.items)) throw new Error("Translate failed: malformed payload");
+      const tts = await postJsonStrict(`${API_BASE}/tts`, { items: tr.items });
+      if (!tts || !Array.isArray(tts.items)) throw new Error("TTS failed: malformed payload");
+      setResults(tts.items.map(it => ({ code: it.code, name: LANGUAGE_OPTIONS.find(l => l.code === it.code)?.name || it.code, text: it.text, audioUrl: it.audioUrl })));
+    } catch (e) {
+      console.error(e);
+      setError((e?.message || String(e)) + `\nTips: 1) Start backend (:3000). 2) Ensure Vite proxy or VITE_API_BASE points to it. 3) Hit ${API_BASE}/health. 4) Try ${API_BASE}/mock.`);
+    } finally { setBusy(false); }
+  }
+
+  async function reverseTranslate() {
+    setBusy(true); setError(""); setReverseResult(null);
+    try {
+      const tr = await postJsonStrict(`${API_BASE}/translate`, { text: reverseInput.trim(), targets: ["en"], from: reverseLang });
+      if (!tr || !Array.isArray(tr.items)) throw new Error("Reverse translate failed");
+      setReverseResult(tr.items[0]);
+    } catch (e) {
+      console.error(e);
+      setError("Reverse translation failed: " + (e?.message || String(e)));
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <div className="max-w-3xl mx-auto p-6 flex flex-col gap-6">
+      <header className="flex items-end justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold">Multi‑Language Audio Translator</h1>
+          <p className="text-sm opacity-70">English → Kids’ languages, and back.</p>
+        </div>
+        <button className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50" onClick={generate} disabled={!input || selected.length === 0 || busy}>
+          {busy ? "Generating…" : "Generate audio"}
+        </button>
+      </header>
+
+      <DiagnosticsBar />
+
+      <section className="flex flex-col gap-3">
+        <label className="text-sm font-medium">English to class</label>
+        <textarea className="w-full border rounded-2xl p-4 min-h-[120px]" placeholder="e.g., Please sit down." value={input} onChange={(e) => setInput(e.target.value)} />
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <label className="text-sm font-medium">Target languages ({selected.length}/12)</label>
+        <div className="flex gap-2 flex-wrap">
+          {LANGUAGE_OPTIONS.map(l => (<Pill key={l.code} active={selected.includes(l.code)} onClick={() => toggle(l.code)}>{l.name}</Pill>))}
+        </div>
+      </section>
+
+      {error && (<div className="border border-red-300 bg-red-50 text-red-800 p-3 rounded-xl text-sm whitespace-pre-wrap">{error}</div>)}
+
+      {results.length > 0 && (
+        <section className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {results.map(res => (
+            <AudioCard key={res.code} langName={res.name} text={res.text} audioUrl={res.audioUrl} loading={false} onPlay={() => { new Audio(res.audioUrl).play(); }} />
+          ))}
+        </section>
+      )}
+
+      {/* Reverse translation section */}
+      <section className="flex flex-col gap-3 border-t pt-4 mt-4">
+        <h2 className="text-lg font-semibold">Kids → English</h2>
+        <div className="flex gap-2 items-center">
+          <select value={reverseLang} onChange={(e) => setReverseLang(e.target.value)} className="border rounded-xl p-2">
+            {LANGUAGE_OPTIONS.map(l => (<option key={l.code} value={l.code}>{l.name}</option>))}
+          </select>
+          <textarea className="flex-1 border rounded-2xl p-4 min-h-[80px]" placeholder="Child’s reply here…" value={reverseInput} onChange={(e) => setReverseInput(e.target.value)} />
+          <button className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50" onClick={reverseTranslate} disabled={!reverseInput || busy}>Translate → EN</button>
+        </div>
+        {reverseResult && (
+          <div className="border rounded-2xl p-4 shadow-sm bg-gray-50">
+            <div className="text-sm opacity-70">English</div>
+            <div className="font-medium">{reverseResult.text}</div>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/*
+===============================
+REPLIT ONE‑SERVER SETUP (ADDENDUM)
+===============================
+Use this if you still see: `Expected JSON response, got: <!DOCTYPE html> ... /@vite/client`.
+That means Vite is serving index.html instead of your API. On Replit, run ONE server:
+
+1) Build frontend:
+   npm run build
+2) Start backend:
+   node server.cjs
+3) Visit the public URL Replit shows. Express serves both / (static from dist/) and /api/*.
+
+Paste the file below as server.cjs (replaces old one). It serves static + APIs.
+*/
+
+/* --- BEGIN: server.cjs (one‑server mode) ---
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const path = require('path');
+dotenv.config();
+
+const app = express();
+app.use(cors());
+app.use(express.json({ limit: '1mb' }));
+
+// Serve built frontend when present
+const distPath = path.resolve(process.cwd(), 'dist');
+app.use(express.static(distPath));
+
+// Diagnostics -----------------------------------------------------
+app.get('/api/health', (req, res) => res.json({ ok: true, time: new Date().toISOString() }));
+app.all('/api/echo', (req, res) => res.json({ method: req.method, headers: req.headers }));
+app.post('/api/mock', (req, res) => {
+  const { text = '', targets = [] } = req.body || {};
+  const items = targets.slice(0, 12).map(code => ({ code, text: `[${code}] ${text}` }));
+  const out = items.map(it => ({ code: it.code, text: it.text, audioUrl: `data:audio/mpeg;base64,` }));
+  res.json({ items: out });
+});
+
+// Azure Translator ------------------------------------------------
+app.post('/api/translate', async (req, res) => {
+  const { text, targets, from } = req.body || {};
+  if (!text || !Array.isArray(targets) || targets.length === 0) return res.status(400).json({ error: 'bad input' });
+  try {
+    const params = new URLSearchParams({ 'api-version': '3.0', textType: 'plain' });
+    (from ? params.append('from', from) : params.append('from', 'en'));
+    for (const t of targets) params.append('to', t);
+
+    const url = `https://api.cognitive.microsofttranslator.com/translate?${params.toString()}`;
+    const headers = {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      'Ocp-Apim-Subscription-Key': process.env.AZURE_TRANSLATOR_KEY || ''
+    };
+    if ((process.env.AZURE_TRANSLATOR_REGION || '').trim()) headers['Ocp-Apim-Subscription-Region'] = process.env.AZURE_TRANSLATOR_REGION.trim();
+
+    const r = await fetch(url, { method: 'POST', headers, body: JSON.stringify([{ text }]) });
+    const ct = r.headers.get('content-type') || '';
+    const bodyText = await r.text();
+
+    if (!ct.includes('application/json')) return res.status(r.status || 502).json({ error: `Translator non‑JSON (${ct})`, providerSnippet: bodyText.slice(0, 200) });
+
+    let data; try { data = JSON.parse(bodyText); } catch { return res.status(502).json({ error: 'Translator JSON parse failed', providerSnippet: bodyText.slice(0, 200) }); }
+    if (!r.ok) return res.status(r.status).json({ error: data?.error?.message || 'Translator error', raw: data });
+
+    const items = (data?.[0]?.translations || []).map(t => ({ code: t.to, text: t.text }));
+    return res.json({ items });
+  } catch (e) { console.error(e); return res.status(500).json({ error: 'translate failed', detail: String(e) }); }
+});
+
+// Azure Speech TTS ------------------------------------------------
+app.post('/api/tts', async (req, res) => {
+  const { items } = req.body || {};
+  if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ error: 'bad input' });
+  try {
+    const out = [];
+    for (const it of items) {
+      const voice = pickVoiceForLang(it.code);
+      const ssml = `<speak version='1.0' xml:lang='${langToBcp47(it.code)}'><voice name='${voice}'>${escapeXml(it.text)}</voice></speak>`;
+      const url = `https://${process.env.AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
+      const r = await fetch(url, { method: 'POST', headers: {
+        'Ocp-Apim-Subscription-Key': process.env.AZURE_SPEECH_KEY || '',
+        'Content-Type': 'application/ssml+xml',
+        'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3'
+      }, body: ssml });
+      const ct = r.headers.get('content-type') || '';
+      if (!r.ok) { const errText = await r.text(); return res.status(r.status).json({ error: 'TTS error', contentType: ct, providerSnippet: errText.slice(0, 200) }); }
+      const buf = Buffer.from(await r.arrayBuffer());
+      out.push({ code: it.code, text: it.text, audioUrl: `data:audio/mpeg;base64,${buf.toString('base64')}` });
+    }
+    return res.json({ items: out });
+  } catch (e) { console.error(e); return res.status(500).json({ error: 'tts failed', detail: String(e) }); }
+});
+
+function escapeXml(s='') { return s.replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;','\'':'&apos;'}[c])); }
+function langToBcp47(code) { const map = { 'fa':'fa-IR','es':'es-ES','ar':'ar-EG','lv':'lv-LV','ru':'ru-RU','fr':'fr-FR','nl':'nl-NL','pt':'pt-PT','tr':'tr-TR','zh':'zh-CN','da':'da-DK','it':'it-IT' }; return map[code] || 'en-US'; }
+function pickVoiceForLang(code) { const v = { fa:'fa-IR-DilaraNeural', es:'es-ES-ElviraNeural', ar:'ar-EG-SalmaNeural', lv:'lv-LV-EveritaNeural', ru:'ru-RU-DmitryNeural', fr:'fr-FR-DeniseNeural', nl:'nl-NL-ColetteNeural', pt:'pt-PT-FernandaNeural', tr:'tr-TR-AhmetNeural', zh:'zh-CN-XiaoxiaoNeural', da:'da-DK-ChristelNeural', it:'it-IT-ElsaNeural' }; return v[code] || 'en-US-JennyNeural'; }
+
+// SPA fallback for non‑API routes
+app.get(/^(?!\/api\/).*/, (req, res) => {
+  res.sendFile(path.join(distPath, 'index.html'));
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`API + static running on :${PORT}`));
+
+// Self‑test
+if (process.env.SELFTEST) {
+  (function runSelfTests() {
+    const xml = '<?xml version="1.0"?><error><message>Bad key</message></error>';
+    try { JSON.parse(xml); console.error('FAIL: XML parsed as JSON'); } catch { console.log('OK: JSON.parse fails on XML'); }
+  })();
+}
+--- END: server.cjs ---
+*/

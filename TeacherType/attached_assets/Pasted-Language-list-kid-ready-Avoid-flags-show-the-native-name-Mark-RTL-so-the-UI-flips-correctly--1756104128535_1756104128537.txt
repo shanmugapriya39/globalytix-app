@@ -1,0 +1,252 @@
+Language list (kid-ready)
+
+Avoid flags; show the native name. Mark RTL so the UI flips correctly.
+
+// languageCatalog.ts
+export type Lang = {
+  uiLabel: string;        // Native name
+  code: string;           // Translator code
+  ttsLocale: string;      // Speech TTS locale
+  defaultVoice: string;   // Speech TTS neural voice (pick a sane default)
+  rtl?: boolean;
+};
+
+export const LANGS: Lang[] = [
+  { uiLabel: "العربية", code: "ar", ttsLocale: "ar-EG", defaultVoice: "ar-EG-SalmaNeural", rtl: true },
+  { uiLabel: "Español", code: "es", ttsLocale: "es-ES", defaultVoice: "es-ES-AlvaroNeural" },
+  { uiLabel: "Français", code: "fr", ttsLocale: "fr-FR", defaultVoice: "fr-FR-DeniseNeural" },
+  { uiLabel: "Русский", code: "ru", ttsLocale: "ru-RU", defaultVoice: "ru-RU-DariyaNeural" },
+  { uiLabel: "Português", code: "pt", ttsLocale: "pt-BR", defaultVoice: "pt-BR-AntonioNeural" },
+  { uiLabel: "Türkçe", code: "tr", ttsLocale: "tr-TR", defaultVoice: "tr-TR-EmelNeural" },
+  { uiLabel: "Italiano", code: "it", ttsLocale: "it-IT", defaultVoice: "it-IT-IsabellaNeural" },
+  { uiLabel: "Nederlands", code: "nl", ttsLocale: "nl-NL", defaultVoice: "nl-NL-MaartenNeural" },
+  { uiLabel: "Dansk", code: "da", ttsLocale: "da-DK", defaultVoice: "da-DK-ChristelNeural" },
+  { uiLabel: "中文（简体）", code: "zh-Hans", ttsLocale: "zh-CN", defaultVoice: "zh-CN-XiaoxiaoNeural" },
+  { uiLabel: "فارسی", code: "fa", ttsLocale: "fa-IR", defaultVoice: "fa-IR-DilaraNeural", rtl: true },
+  { uiLabel: "Latviešu", code: "lv", ttsLocale: "lv-LV", defaultVoice: "lv-LV-EveritaNeural" },
+];
+
+
+Voice IDs vary by provider/region—treat these as defaults; expose a dropdown to switch.
+
+Server endpoints (Node/Express, TypeScript)
+
+Never call vendor APIs from the browser with your keys.
+
+// server.ts
+import express from "express";
+import fetch from "node-fetch";
+import rateLimit from "express-rate-limit";
+
+const app = express();
+app.use(express.json({ limit: "1mb" }));
+app.use(rateLimit({ windowMs: 60_000, max: 120 }));
+
+const AZURE_REGION = process.env.AZURE_REGION!;
+const TRANSLATOR_KEY = process.env.TRANSLATOR_KEY!;
+const SPEECH_KEY = process.env.SPEECH_KEY!;
+
+// 1) Translate to many languages in one shot
+app.post("/translate", async (req, res) => {
+  const { text, targetLangs }:{text:string; targetLangs:string[]} = req.body;
+  if (!text || !targetLangs?.length) return res.status(400).json({ error: "text/targetLangs required" });
+
+  const url = `https://api.cognitive.microsofttranslator.com/translate?api-version=3.0&from=en&${targetLangs.map(l=>`to=${encodeURIComponent(l)}`).join("&")}`;
+
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Ocp-Apim-Subscription-Key": TRANSLATOR_KEY,
+      "Ocp-Apim-Subscription-Region": AZURE_REGION,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify([{ Text: text }])
+  });
+
+  if (!r.ok) {
+    const msg = await r.text();
+    return res.status(502).json({ error: "translator failed", msg });
+  }
+  // Response shape: [{ translations: [{to:'xx', text:'...'}, ...] }]
+  const data = await r.json();
+  res.json({ translations: data[0].translations });
+});
+
+// 2) TTS per language
+app.post("/tts", async (req, res) => {
+  const { text, voice, locale }:{text:string; voice:string; locale:string} = req.body;
+  if (!text || !voice || !locale) return res.status(400).json({ error: "text/voice/locale required" });
+
+  const ssml = `
+<speak version='1.0' xml:lang='${locale}'>
+  <voice name='${voice}'>
+    <prosody rate='-10%'>${escapeXml(text)}</prosody>
+  </voice>
+</speak>`.trim();
+
+  const url = `https://${AZURE_REGION}.tts.speech.microsoft.com/cognitiveservices/v1`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Ocp-Apim-Subscription-Key": SPEECH_KEY,
+      "Content-Type": "application/ssml+xml",
+      "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+      "User-Agent": "TeacherTranslationApp"
+    },
+    body: ssml
+  });
+
+  if (!r.ok) {
+    const msg = await r.text();
+    return res.status(502).json({ error: "tts failed", msg });
+  }
+  const buf = Buffer.from(await r.arrayBuffer());
+  res.setHeader("Content-Type", "audio/mpeg");
+  res.send(buf);
+});
+
+function escapeXml(s:string){
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+
+app.listen(8787, ()=>console.log("API on :8787"));
+
+Client core (React + TypeScript)
+
+Parallel but rate-limited, with caching and RTL handled.
+
+// api.ts (client)
+export async function translateMany(text: string, targets: string[]) {
+  const r = await fetch("/translate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, targetLangs: targets })
+  });
+  if (!r.ok) throw new Error("translate failed");
+  // -> { translations: [{to, text}, ...] }
+  return (await r.json()).translations as {to:string; text:string}[];
+}
+
+// simple concurrency limiter
+function createLimiter(limit = 3) {
+  let active = 0, queue: (()=>void)[] = [];
+  const run = <T>(fn:()=>Promise<T>) => new Promise<T>((resolve,reject)=>{
+    const exec = async () => {
+      active++;
+      try { resolve(await fn()); }
+      catch(e){ reject(e); }
+      finally { active--; if (queue.length) queue.shift()!(); }
+    };
+    active < limit ? exec() : queue.push(exec);
+  });
+  return run;
+}
+
+const runLimited = createLimiter(3);
+
+// IndexedDB-like cache stub; swap with idb-keyval if you like
+const mem = new Map<string, Blob>();
+export async function ttsCached(text:string, voice:string, locale:string) {
+  const key = `${locale}:${voice}:${text}`;
+  if (mem.has(key)) return mem.get(key)!;
+  const r = await runLimited(()=> fetch("/tts", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, voice, locale })
+  }));
+  if (!r.ok) throw new Error("tts failed");
+  const blob = await r.blob();
+  mem.set(key, blob);
+  return blob;
+}
+
+
+Hooking into your UI (pseudo-component):
+
+// GenerateAll.tsx
+import { LANGS } from "./languageCatalog";
+import { translateMany, ttsCached } from "./api";
+
+type Choice = { code: string; voice: string; locale: string; rtl?: boolean; uiLabel: string };
+
+export async function generateAll(english: string, selected: Choice[], onProgress: (n:number,total:number)=>void) {
+  // 1) Translate in one call
+  const translations = await translateMany(english, selected.map(s=>s.code));
+  // 2) For each translation, synthesize audio (limited parallel)
+  const total = translations.length;
+  let done = 0;
+  const results = await Promise.all(translations.map(async (t) => {
+    const lang = selected.find(s => s.code === t.to)!;
+    const blob = await ttsCached(t.text, lang.voice, lang.locale);
+    onProgress(++done, total);
+    const filename = `${lang.uiLabel}-${Date.now()}.mp3`;
+    return { lang, text: t.text, audio: blob, filename };
+  }));
+  return results;
+}
+
+
+Export ZIP + QR codes (teacher-friendly)
+
+Use JSZip to bundle all MP3s.
+
+Generate QR with a data URL (or short link if you host the files).
+
+EAL/ELL UX guardrails
+
+Readability
+
+Base text size ≥ 18px; line height 1.5; generous spacing.
+
+Use Noto family for wide script coverage.
+
+RTL aware: dir="rtl" for Arabic/Persian containers.
+
+Language labels
+
+Show native names (“Español”, “العربية”), not flags.
+
+Audio controls
+
+One-tap play. Speed slider (0.8×, 1.0×, 1.2×).
+
+Auto-pause other audios when one plays.
+
+Teacher shortcuts
+
+“Generate All” and “Export All”.
+
+Saved phrases (hello, sit down, open your book, bathroom, line up…).
+
+Class QR board: each language card shows a QR that plays the audio.
+
+Error states
+
+If a voice is unavailable, fall back to another locale (e.g., pt-BR → pt-PT).
+
+Privacy
+
+No personal data is sent except the English text.
+
+If you add speech input, ask consent; provide Erase Last Hour.
+
+Latency budget
+
+Translation round trip < 400 ms typical.
+
+TTS in parallel with a 3-at-a-time limiter to avoid throttling.
+
+Offline
+
+Cache last N translations and MP3s in IndexedDB for spotty Wi-Fi.
+
+Testing checklist (don’t skip)
+
+RTL rendering: punctuation, numbers, line breaks for Arabic/Persian.
+
+Diacritics: Spanish/French accents render and speak correctly.
+
+Long text: split on sentences; cap to e.g., 500 chars per TTS request.
+
+Whispered/short words: if you add ASR later, test low-confidence paths.
+
+School network: try behind a proxy / limited Wi-Fi.

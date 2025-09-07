@@ -1,0 +1,58 @@
+That error means the Speech SDK didn’t get a region:
+throwIfNullOrUndefined: SpeechServiceConnection_Region ⇒ tok.region was empty/undefined when you did SpeechTranslationConfig.fromAuthorizationToken(token, region).
+
+Likely cause
+
+Your /api/speech/token route is returning { token: "…" } without a valid region, or it builds the token URL with a bad region (e.g. uae-north.api… instead of uaenorth.api…).
+
+Fix (server)
+
+Normalize the region and always return it with the token.
+
+Replace your /api/speech/token handler with this:
+
+app.get('/api/speech/token', async (req, res) => {
+  try {
+    const raw = (process.env.AZURE_SPEECH_REGION || '').trim();
+    const key = (process.env.AZURE_SPEECH_KEY || '').trim();
+    if (!raw || !key) return res.status(500).json({ error: 'Speech key/region missing' });
+
+    // STS host uses region with no separators (uae-north -> uaenorth)
+    const hostRegion = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const tokenUrl = `https://${hostRegion}.api.cognitive.microsoft.com/sts/v1.0/issueToken`;
+
+    const r = await fetch(tokenUrl, { method: 'POST', headers: { 'Ocp-Apim-Subscription-Key': key } });
+    const body = await r.text();
+    if (!r.ok) return res.status(r.status).json({ error: 'token failed', providerSnippet: body.slice(0,200), hostRegion });
+
+    // Send back the exact region string the SDK should use
+    res.json({ token: body, region: hostRegion });
+  } catch (e) {
+    res.status(500).json({ error: 'token exception', detail: String(e) });
+  }
+});
+
+Fix (client guard)
+
+Before creating the SDK config, assert the region exists so the error becomes clear:
+
+const tok = await getJsonStrict(`${API_BASE}/speech/token`);
+if (!tok?.region) throw new Error('Speech token missing region from server');
+const speechConfig = sdk.SpeechTranslationConfig.fromAuthorizationToken(tok.token, tok.region);
+
+Check your secrets (exact names, no spaces)
+AZURE_SPEECH_KEY       = <Speech resource Key 1>
+AZURE_SPEECH_REGION    = uaenorth   // all lowercase, no dash
+
+
+If you put uae-north, change it to uaenorth. Restart the server after editing secrets.
+
+Quick tests
+
+Open /api/diag → confirm it shows your Speech region.
+
+Open /api/speech/token → you must see { token: "...", region: "uaenorth" }.
+
+Start live translation again.
+
+If /api/speech/token doesn’t return JSON with region, the SDK will throw exactly what you saw. Fix that first and the live mode will start cleanly.

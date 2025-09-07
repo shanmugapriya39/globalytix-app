@@ -1,0 +1,108 @@
+You’ve got two issues:
+
+“Language not detected.”
+
+Live view shows the original first, translation lags, and the next sentence overwrites the previous.
+
+Both are solvable with how we use the Speech SDK events.
+
+What’s going wrong
+
+Language not detected: with auto-detect you must read the detected code from
+e.result.properties.getProperty(PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult). If you don’t, it will stay “Auto-detected” forever even when detection succeeded.
+
+Flicker/overwrite: you’re updating the UI from the recognizing (partial) event. Partials arrive fast and sometimes before the translated text exists, so you show source text first. Then when a new utterance begins, the next partial replaces what you showed. You should:
+
+Use recognizing only for a separate “partial” line.
+
+Use recognized for final segments and append them.
+
+Clear partials after each final segment.
+
+Concrete fix (drop-in)
+1) Add state for partial vs final + detected language
+
+Inside your App():
+
+const [live, setLive] = useState(false);
+
+// final (committed) text
+const [liveSrcFinal, setLiveSrcFinal] = useState("");
+const [liveEnFinal,  setLiveEnFinal]  = useState("");
+
+// partial (in-progress) text
+const [liveSrcPart, setLiveSrcPart] = useState("");
+const [liveEnPart,  setLiveEnPart]  = useState("");
+
+// detected language code -> pretty label in your dropdown
+const [detectedLang, setDetectedLang] = useState(""); // e.g. "tr-TR"
+
+2) When starting live, reset everything
+async function startLive() {
+  setLiveSrcFinal(""); setLiveEnFinal("");
+  setLiveSrcPart("");  setLiveEnPart("");
+  setDetectedLang("");
+  // ... create recognizer as before
+}
+
+3) In your live handlers, split partial vs final and capture the detected language
+recognizer.recognizing = (_s, e) => {
+  // PARTIALS: show but don’t commit
+  const en = e.result?.translations?.get('en') || "";
+  setLiveSrcPart(e.result?.text || "");
+  setLiveEnPart(en || "");      // only show translation if we actually have it
+};
+
+recognizer.recognized = (_s, e) => {
+  // FINAL: append to committed buffers
+  const en  = e.result?.translations?.get('en') || "";
+  const src = e.result?.text || "";
+
+  // detected language (auto-detect)
+  const raw = e.result?.properties?.getProperty(
+    sdkRef.current.PropertyId.SpeechServiceConnection_AutoDetectSourceLanguageResult
+  );
+  if (raw) setDetectedLang(raw); // e.g. "tr-TR"
+
+  if (src) setLiveSrcFinal(prev => (prev ? prev + " " : "") + src);
+  if (en)  setLiveEnFinal(prev  => (prev  ? prev  + " " : "") + en);
+
+  // clear partials after each final segment
+  setLiveSrcPart(""); setLiveEnPart("");
+};
+
+4) Render: final + partial together, so you never “lose” a sentence
+{/* Detected Language display */}
+<select value={detectedLang} onChange={()=>{}} className="border rounded-xl p-2" disabled>
+  <option>{detectedLang ? prettyName(detectedLang) : "Auto-detected"}</option>
+</select>
+
+{/* Live transcript panes */}
+<div className="text-sm opacity-70 mt-2">Live transcript (source):</div>
+<div className="p-3 rounded-xl bg-white border min-h-[48px]">
+  {liveSrcFinal} <em className="opacity-50">{liveSrcPart}</em>
+</div>
+
+<div className="text-sm opacity-70 mt-2">Live English:</div>
+<div className="p-3 rounded-xl bg-blue-50 border min-h-[48px]">
+  {liveEnFinal} <em className="opacity-50">{liveEnPart}</em>
+</div>
+
+
+Add a tiny helper to map codes to names (reuse your language list):
+
+function prettyName(bcp47) {
+  const base = bcp47.split('-')[0]; // "tr" from "tr-TR"
+  return (LANGUAGE_OPTIONS.find(l => l.code.startsWith(base))?.name) || bcp47;
+}
+
+5) On stop, finalize
+function stopLive() {
+  const r = liveRecRef.current;
+  if (r) r.stopContinuousRecognitionAsync(()=>{},()=>{});
+  // merge the last partials so nothing is lost mid-sentence
+  if (liveSrcPart) setLiveSrcFinal(prev => (prev ? prev + " " : "") + liveSrcPart);
+  if (liveEnPart)  setLiveEnFinal(prev  => (prev  ? prev  + " " : "") + liveEnPart);
+  setLiveSrcPart(""); setLiveEnPart("");
+  setLive(false);
+}

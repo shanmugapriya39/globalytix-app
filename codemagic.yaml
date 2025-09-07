@@ -1,0 +1,40 @@
+workflows:
+  ios_capacitor_appstore:
+    name: iOS Capacitor App Store (nested app dir)
+    max_build_duration: 60
+    environment:
+      node: 22
+      cocoapods: default
+      vars:
+        APP_DIR: "TeacherType"
+        XCODE_SCHEME: "App"
+        XCODE_WORKSPACE: "TeacherType/ios/App/App.xcworkspace"
+    scripts:
+      - name: Install dependencies
+        script: |
+          cd "$APP_DIR"
+          npm ci
+      - name: Build web and sync Capacitor
+        script: |
+          cd "$APP_DIR"
+          npm run build
+          npx cap sync ios
+      - name: CocoaPods
+        script: |
+          cd "$APP_DIR/ios/App"
+          pod repo update
+          pod install
+      - name: Xcode archive and export
+        script: |
+          xcodebuild -workspace "$XCODE_WORKSPACE" -scheme "$XCODE_SCHEME" -configuration Release -archivePath $CM_BUILD_DIR/App.xcarchive archive DEVELOPMENT_TEAM=$APPLE_TEAM_ID
+          xcodebuild -exportArchive -archivePath $CM_BUILD_DIR/App.xcarchive -exportOptionsPlist exportOptions.plist -exportPath $CM_BUILD_DIR
+    artifacts:
+      - $CM_BUILD_DIR/*.ipa
+      - $CM_BUILD_DIR/*.dSYM.zip
+      - $CM_BUILD_DIR/*.app
+    publishing:
+      app_store_connect:
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+        issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+        submit_to_app_store: false

@@ -1,3 +1,5 @@
+source 'https://cdn.cocoapods.org/'   # <-- add this as the first non-comment line
+
 require_relative '../../node_modules/@capacitor/ios/scripts/pods_helpers'
 
 platform :ios, '14.0'

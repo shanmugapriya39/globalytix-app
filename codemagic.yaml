@@ -4,28 +4,11 @@ workflows:
     environment:
       xcode: 16.4
       cocoapods: default
+      groups:
+        - appstore                    # must contain: APP_STORE_CONNECT_PRIVATE_KEY_B64, CERTIFICATE_PRIVATE_KEY_B64, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER
       vars:
-        # ==== REQUIRED: ASC API credentials (INLINE) ====
-        APP_STORE_CONNECT_ISSUER_ID: "YOUR-ISSUER-ID-UUID"         # from App Store Connect → Users and Access → Keys
-        APP_STORE_CONNECT_KEY_IDENTIFIER: "YOURKEYID123"           # the Key ID (e.g., 2T5MXFAHEV5Z)
-
-        # Paste your full .p8 here EXACTLY (no quotes). Keep headers/footers and newlines.
-        APP_STORE_CONNECT_PRIVATE_KEY: |-
-          -----BEGIN PRIVATE KEY-----
-          <PASTE YOUR .p8 CONTENTS EXACTLY, INCLUDING THE LINES YOU SENT>
-          -----END PRIVATE KEY-----
-
-        # ==== REQUIRED: RSA key used to CREATE the signing certificate ====
-        # Generate on Windows with:  openssl genrsa -out private.key 2048
-        # Then open private.key and paste its ENTIRE content here:
-        CERTIFICATE_PRIVATE_KEY: |-
-          -----BEGIN RSA PRIVATE KEY-----
-          <PASTE YOUR RSA 2048 KEY HERE>
-          -----END RSA PRIVATE KEY-----
-
-        # ==== Project settings ====
         BUNDLE_ID: "com.yourcompany.yourapp"
-        XCODE_PROJECT: "YourApp.xcworkspace"   # change to "YourApp.xcodeproj" if you DON'T use CocoaPods
+        XCODE_PROJECT: "YourApp.xcworkspace"   # change to .xcodeproj if you don't use CocoaPods
         XCODE_SCHEME: "YourScheme"
         EXPORT_METHOD: "app-store"              # app-store | ad-hoc | development | enterprise
 
@@ -35,22 +18,39 @@ workflows:
         - "~/Library/Developer/Xcode/DerivedData"
 
     scripts:
-      - name: "Sanity check required vars"
+      # 1) Decode keys from base64 (so PEM formatting is perfect)
+      - name: "Decode keys (avoid PEM parsing issues)"
         script: |
           set -euo pipefail
-          need=(APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_KEY_IDENTIFIER APP_STORE_CONNECT_PRIVATE_KEY CERTIFICATE_PRIVATE_KEY BUNDLE_ID XCODE_PROJECT XCODE_SCHEME)
-          for v in "${need[@]}"; do
-            [ -n "${!v:-}" ] || { echo "Missing required variable: $v"; exit 1; }
-          done
-          echo "ASC Issuer: ${APP_STORE_CONNECT_ISSUER_ID:0:8}…  KeyID: ${APP_STORE_CONNECT_KEY_IDENTIFIER}"
+          : "${APP_STORE_CONNECT_PRIVATE_KEY_B64:?missing}"
+          : "${CERTIFICATE_PRIVATE_KEY_B64:?missing}"
 
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY_B64" | base64 --decode > asc_key.p8
+          echo "$CERTIFICATE_PRIVATE_KEY_B64"      | base64 --decode > cert.key
+
+          # quick sanity: just headers
+          head -1 asc_key.p8; tail -1 asc_key.p8
+          head -1 cert.key;   tail -1 cert.key
+
+          # export to env (some tools read from env)
+          export APP_STORE_CONNECT_PRIVATE_KEY="$(cat asc_key.p8)"
+          export CERTIFICATE_PRIVATE_KEY="$(cat cert.key)"
+
+      # 2) Fetch signing files using ASC (creates cert + profile)
       - name: "Fetch signing files from App Store Connect"
         script: |
           set -euo pipefail
+          : "${APP_STORE_CONNECT_ISSUER_ID:?missing}"
+          : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?missing}"
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --create
+            --create \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "$(cat asc_key.p8)"
 
+      # 3) (Optional) CocoaPods
       - name: "Resolve dependencies (CocoaPods)"
         script: |
           if [ -f "Podfile" ]; then
@@ -58,6 +58,7 @@ workflows:
             pod install
           fi
 
+      # 4) Build and export IPA
       - name: "Build and export IPA"
         script: |
           set -euo pipefail
@@ -80,4 +81,3 @@ workflows:
       - "$CM_EXPORT_DIR/*.dSYM.zip"
       - "$CM_EXPORT_DIR/export-options.plist"
       - "~/Library/Logs/gym/*.log"
-

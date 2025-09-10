@@ -39,13 +39,20 @@ workflows:
           set -euo pipefail
           : "${APP_STORE_CONNECT_ISSUER_ID:?missing}"
           : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?missing}"
+          
+          echo "Running app-store-connect fetch-signing-files with:"
+          echo "Bundle ID: $BUNDLE_ID"
+          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
+          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
+          
+          # Try with file path instead of @ syntax
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key @asc_key.p8 \
-            --certificate-key @cert.key
+            --private-key asc_key.p8 \
+            --certificate-key cert.key
             
       # 3) (Optional) CocoaPods
       - name: "Resolve dependencies (CocoaPods)"

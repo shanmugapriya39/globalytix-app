@@ -5,26 +5,12 @@ workflows:
       xcode: 16.4
       cocoapods: default
       vars:
-        # ASC API key (store real values as Encrypted in UI)
-        APP_STORE_CONNECT_ISSUER_ID: "Encrypted(...)"
-        APP_STORE_CONNECT_KEY_IDENTIFIER: "Encrypted(...)"
-        APP_STORE_CONNECT_PRIVATE_KEY: |-
-          -----BEGIN PRIVATE KEY-----
-          <your .p8 contents here>
-          -----END PRIVATE KEY-----
-
-        # Required for --create (RSA key used to generate the signing cert)
-        CERTIFICATE_PRIVATE_KEY: |-
-          -----BEGIN RSA PRIVATE KEY-----
-          <from `openssl genrsa -out private.key 2048`>
-          -----END RSA PRIVATE KEY-----
-
-        # Project settings
+        # Non-secrets only here
         BUNDLE_ID: "com.yourcompany.yourapp"
         # Use ONE of these: .xcworkspace (Pods) OR .xcodeproj (no Pods)
-        XCODE_PROJECT: "YourApp.xcworkspace"   # change to "YourApp.xcodeproj" if no CocoaPods
+        XCODE_PROJECT: "YourApp.xcworkspace"   # or "YourApp.xcodeproj"
         XCODE_SCHEME: "YourApp"
-        EXPORT_METHOD: "app-store"              # app-store | ad-hoc | development | enterprise
+        EXPORT_METHOD: "app-store"             # app-store | ad-hoc | development | enterprise
 
     cache:
       cache_paths:
@@ -35,6 +21,12 @@ workflows:
       - name: "Fetch signing files from App Store Connect"
         script: |
           set -euo pipefail
+          # These are read from Team → Environment variables
+          : "${APP_STORE_CONNECT_ISSUER_ID:?missing}"
+          : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?missing}"
+          : "${APP_STORE_CONNECT_PRIVATE_KEY:?missing}"
+          : "${CERTIFICATE_PRIVATE_KEY:?missing}"
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
@@ -74,13 +66,3 @@ workflows:
       - "$CM_EXPORT_DIR/export-options.plist"
       - "~/Library/Logs/gym/*.log"
 
-    # Optional: enable to upload to TestFlight automatically
-    # publishing:
-    #   app_store_connect:
-    #     auth: api_key
-    #     key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
-    #     issuer_id: $APP_STORE_CONNECT_ISSUER_ID
-    #     private_key: $APP_STORE_CONNECT_PRIVATE_KEY
-    #     submit_to_testflight: true
-    #     beta_groups:
-    #       - "Internal Testers"

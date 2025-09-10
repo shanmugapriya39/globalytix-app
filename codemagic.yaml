@@ -3,16 +3,19 @@ workflows:
     name: iOS Capacitor App Store (nested app dir)
     instance_type: mac_mini_m2
     max_build_duration: 60
+
     environment:
       xcode: 16.4
       node: 22
       cocoapods: default
+      groups:
+        - appstore                        # imports APP_STORE_CONNECT_* from your "appstore" group
       vars:
-        APP_DIR: "TeacherType"                               # your app root
+        APP_DIR: "TeacherType"            # project root inside repo
         XCODE_SCHEME: "App"
         XCODE_WORKSPACE: "TeacherType/ios/App/App.xcworkspace"
         DEVELOPMENT_TEAM: "8598VNYD3C"
-        BUNDLE_ID: "com.AbleNest"                            # must match capacitor.config.ts
+        BUNDLE_ID: "com.AbleNest"         # must match TeacherType/capacitor.config.ts
 
     scripts:
       - name: Install dependencies
@@ -39,11 +42,22 @@ workflows:
           cd "$APP_DIR/ios/App"
           pod install
 
+      - name: Check App Store Connect secrets
+        script: |
+          set -euo pipefail
+          : "${APP_STORE_CONNECT_PRIVATE_KEY:?APP_STORE_CONNECT_PRIVATE_KEY missing}"
+          : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?APP_STORE_CONNECT_KEY_IDENTIFIER missing}"
+          : "${APP_STORE_CONNECT_ISSUER_ID:?APP_STORE_CONNECT_ISSUER_ID missing}"
+          echo "All App Store Connect secrets are present."
+
       - name: Prepare signing (fetch profiles via App Store Connect)
         script: |
           set -euo pipefail
           keychain initialize
-          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create \
+            --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
+            --key-identifier "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
+            --private-key "$APP_STORE_CONNECT_PRIVATE_KEY"
           keychain add-certificates
           xcode-project use-profiles
 
@@ -86,7 +100,7 @@ workflows:
 
     publishing:
       app_store_connect:
-        api_key: $APP_STORE_CONNECT_PRIVATE_KEY     # paste full .p8 text into this secret
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
         key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
         submit_to_testflight: true

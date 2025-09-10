@@ -11,12 +11,10 @@ workflows:
         XCODE_PROJECT: "YourApp.xcworkspace"   # change to .xcodeproj if you don't use CocoaPods
         XCODE_SCHEME: "YourScheme"
         EXPORT_METHOD: "app-store"              # app-store | ad-hoc | development | enterprise
-
     cache:
       cache_paths:
         - "~/Library/Caches/CocoaPods"
         - "~/Library/Developer/Xcode/DerivedData"
-
     scripts:
       # 1) Decode keys from base64 (so PEM formatting is perfect)
       - name: "Decode keys (avoid PEM parsing issues)"
@@ -24,32 +22,31 @@ workflows:
           set -euo pipefail
           : "${APP_STORE_CONNECT_PRIVATE_KEY_B64:?missing}"
           : "${CERTIFICATE_PRIVATE_KEY_B64:?missing}"
-
           echo "$APP_STORE_CONNECT_PRIVATE_KEY_B64" | base64 --decode > asc_key.p8
           echo "$CERTIFICATE_PRIVATE_KEY_B64"      | base64 --decode > cert.key
-
           # quick sanity: just headers
+          echo "ASC Key headers:"
           head -1 asc_key.p8; tail -1 asc_key.p8
+          echo "Certificate Key headers:"
           head -1 cert.key;   tail -1 cert.key
-
-          # export to env (some tools read from env)
-          export APP_STORE_CONNECT_PRIVATE_KEY="$(cat asc_key.p8)"
-          export CERTIFICATE_PRIVATE_KEY="$(cat cert.key)"
-
+          # Verify file sizes (should be non-zero)
+          echo "ASC key size: $(wc -c < asc_key.p8) bytes"
+          echo "Cert key size: $(wc -c < cert.key) bytes"
+          
       # 2) Fetch signing files using ASC (creates cert + profile)
       - name: "Fetch signing files from App Store Connect"
         script: |
           set -euo pipefail
           : "${APP_STORE_CONNECT_ISSUER_ID:?missing}"
           : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?missing}"
-
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
             --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key "$(cat asc_key.p8)"
-
+            --private-key @asc_key.p8 \
+            --certificate-key @cert.key
+            
       # 3) (Optional) CocoaPods
       - name: "Resolve dependencies (CocoaPods)"
         script: |
@@ -57,7 +54,7 @@ workflows:
             pod repo update
             pod install
           fi
-
+          
       # 4) Build and export IPA
       - name: "Build and export IPA"
         script: |
@@ -75,7 +72,6 @@ workflows:
               --archive-configuration "Release" \
               --export-method "$EXPORT_METHOD"
           fi
-
     artifacts:
       - "$CM_EXPORT_DIR/*.ipa"
       - "$CM_EXPORT_DIR/*.dSYM.zip"

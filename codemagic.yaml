@@ -4,13 +4,16 @@ workflows:
     environment:
       xcode: 16.4
       cocoapods: default
+      groups:
+        - appstore              # <-- uses your group in the screenshot
       vars:
-        # Non-secrets only here
+        # project settings (non-secrets)
         BUNDLE_ID: "com.yourcompany.yourapp"
-        # Use ONE of these: .xcworkspace (Pods) OR .xcodeproj (no Pods)
-        XCODE_PROJECT: "YourApp.xcworkspace"   # or "YourApp.xcodeproj"
+        XCODE_PROJECT: "YourApp.xcworkspace"   # change to "YourApp.xcodeproj" if NO CocoaPods
         XCODE_SCHEME: "YourApp"
-        EXPORT_METHOD: "app-store"             # app-store | ad-hoc | development | enterprise
+        EXPORT_METHOD: "app-store"              # app-store | ad-hoc | development | enterprise
+        # Optional if you want to pin the team in build steps:
+        # DEVELOPMENT_TEAM and APPLE_TEAM_ID already exist in your group; we don’t need them here.
 
     cache:
       cache_paths:
@@ -18,15 +21,20 @@ workflows:
         - "~/Library/Developer/Xcode/DerivedData"
 
     scripts:
+      - name: "Sanity check required vars"
+        script: |
+          set -euo pipefail
+          need=(APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_KEY_IDENTIFIER APP_STORE_CONNECT_PRIVATE_KEY CERTIFICATE_PRIVATE_KEY BUNDLE_ID)
+          for v in "${need[@]}"; do
+            if [ -z "${!v:-}" ]; then
+              echo "Missing required variable: $v"; exit 1
+            fi
+          done
+          echo "Issuer: ${APP_STORE_CONNECT_ISSUER_ID:0:8}…  KeyID: ${APP_STORE_CONNECT_KEY_IDENTIFIER}"
+
       - name: "Fetch signing files from App Store Connect"
         script: |
           set -euo pipefail
-          # These are read from Team → Environment variables
-          : "${APP_STORE_CONNECT_ISSUER_ID:?missing}"
-          : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?missing}"
-          : "${APP_STORE_CONNECT_PRIVATE_KEY:?missing}"
-          : "${CERTIFICATE_PRIVATE_KEY:?missing}"
-
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
@@ -66,3 +74,13 @@ workflows:
       - "$CM_EXPORT_DIR/export-options.plist"
       - "~/Library/Logs/gym/*.log"
 
+    # Enable if you want automatic TestFlight upload
+    # publishing:
+    #   app_store_connect:
+    #     auth: api_key
+    #     key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
+    #     issuer_id: $APP_STORE_CONNECT_ISSUER_ID
+    #     private_key: $APP_STORE_CONNECT_PRIVATE_KEY
+    #     submit_to_testflight: true
+    #     beta_groups:
+    #       - "Internal Testers"

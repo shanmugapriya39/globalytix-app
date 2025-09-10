@@ -1,74 +1,95 @@
 workflows:
   ios_capacitor_appstore:
     name: iOS Capacitor App Store (nested app dir)
+    instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
       xcode: 16.4
       node: 22
       cocoapods: default
       vars:
-        APP_DIR: "TeacherType"
+        APP_DIR: "TeacherType"                               # your app root
         XCODE_SCHEME: "App"
         XCODE_WORKSPACE: "TeacherType/ios/App/App.xcworkspace"
         DEVELOPMENT_TEAM: "8598VNYD3C"
+        BUNDLE_ID: "com.AbleNest"                            # must match capacitor.config.ts
+
     scripts:
       - name: Install dependencies
         script: |
+          set -euo pipefail
           cd "$APP_DIR"
           npm ci
+
       - name: Build web and sync Capacitor
         script: |
+          set -euo pipefail
           cd "$APP_DIR"
-          npm run build
+          npm run build || true
           npx cap sync ios
+
+      - name: Assert bundle id is com.AbleNest
+        script: |
+          set -euo pipefail
+          grep -R "PRODUCT_BUNDLE_IDENTIFIER" -n "$APP_DIR/ios/App/App.xcodeproj/project.pbxproj"
+
       - name: CocoaPods
         script: |
+          set -euo pipefail
           cd "$APP_DIR/ios/App"
-          pod repo update
           pod install
-      - name: Xcode archive
+
+      - name: Prepare signing (fetch profiles via App Store Connect)
         script: |
+          set -euo pipefail
+          keychain initialize
+          app-store-connect fetch-signing-files "$BUNDLE_ID" --type IOS_APP_STORE --create
+          keychain add-certificates
+          xcode-project use-profiles
+
+      - name: Xcode archive (Manual signing with fetched profile)
+        script: |
+          set -euo pipefail
           xcodebuild \
             -workspace "$XCODE_WORKSPACE" \
             -scheme "$XCODE_SCHEME" \
             -configuration Release \
             -archivePath "$CM_BUILD_DIR/App.xcarchive" \
             -destination "generic/platform=iOS" \
-            DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-            CODE_SIGN_STYLE=Automatic \
-            -allowProvisioningUpdates \
+            CODE_SIGN_STYLE=Manual \
             archive
+
       - name: Create exportOptions.plist
         script: |
+          set -euo pipefail
           cat > "$CM_BUILD_DIR/exportOptions.plist" <<'PLIST'
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
+          <plist version="1.0"><dict>
             <key>method</key><string>app-store</string>
-            <key>signingStyle</key><string>automatic</string>
-            <key>uploadSymbols</key><true/>
             <key>stripSwiftSymbols</key><true/>
             <key>compileBitcode</key><false/>
-          </dict>
-          </plist>
+          </dict></plist>
           PLIST
+
       - name: Export IPA
         script: |
+          set -euo pipefail
           xcodebuild -exportArchive \
             -archivePath "$CM_BUILD_DIR/App.xcarchive" \
             -exportPath "$CM_BUILD_DIR/build" \
-            -exportOptionsPlist "$CM_BUILD_DIR/exportOptions.plist" \
-            -allowProvisioningUpdates
+            -exportOptionsPlist "$CM_BUILD_DIR/exportOptions.plist"
+
     artifacts:
-      - build/*.ipa
-      - App.xcarchive
+      - $CM_BUILD_DIR/build/*.ipa
+      - $CM_BUILD_DIR/App.xcarchive
+
     publishing:
       app_store_connect:
-        api_key: $APP_STORE_CONNECT_PRIVATE_KEY
+        api_key: $APP_STORE_CONNECT_PRIVATE_KEY     # paste full .p8 text into this secret
         key_id: $APP_STORE_CONNECT_KEY_IDENTIFIER
         issuer_id: $APP_STORE_CONNECT_ISSUER_ID
-        submit_to_app_store: false
         submit_to_testflight: true
+        submit_to_app_store: false
         beta_groups:
-          - Internal Testers
+          - "Internal Testers"

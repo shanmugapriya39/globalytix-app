@@ -5,64 +5,61 @@ workflows:
       xcode: 16.4
       cocoapods: default
       groups:
-        - appstore                    # must contain: APP_STORE_CONNECT_PRIVATE_KEY_B64, CERTIFICATE_PRIVATE_KEY_B64, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER
+        - appstore     # must contain: APP_STORE_CONNECT_PRIVATE_KEY_B64, CERTIFICATE_PRIVATE_KEY_B64, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER
       vars:
-        BUNDLE_ID: "com.yourcompany.yourapp"
-        XCODE_PROJECT: "YourApp.xcworkspace"   # change to .xcodeproj if you don't use CocoaPods
-        XCODE_SCHEME: "YourScheme"
-        EXPORT_METHOD: "app-store"              # app-store | ad-hoc | development | enterprise
+        BUNDLE_ID: "com.yourcompany.yourapp"     # <-- replace with your real bundle id
+        XCODE_PROJECT: "YourApp.xcworkspace"     # or "YourApp.xcodeproj" if no CocoaPods
+        XCODE_SCHEME: "YourScheme"               # shared scheme name
+        EXPORT_METHOD: "app-store"               # app-store | ad-hoc | development | enterprise
+
     cache:
       cache_paths:
         - "~/Library/Caches/CocoaPods"
         - "~/Library/Developer/Xcode/DerivedData"
+
     scripts:
-      # 1) Decode keys from base64 (so PEM formatting is perfect)
-      - name: "Decode keys (avoid PEM parsing issues)"
+      - name: "Decode keys (normalize to LF)"
         script: |
           set -euo pipefail
           : "${APP_STORE_CONNECT_PRIVATE_KEY_B64:?missing}"
           : "${CERTIFICATE_PRIVATE_KEY_B64:?missing}"
-          echo "$APP_STORE_CONNECT_PRIVATE_KEY_B64" | base64 --decode > asc_key.p8
-          echo "$CERTIFICATE_PRIVATE_KEY_B64"      | base64 --decode > cert.key
-          # quick sanity: just headers
-          echo "ASC Key headers:"
+
+          echo "$APP_STORE_CONNECT_PRIVATE_KEY_B64" | base64 --decode > asc_key_win.p8
+          echo "$CERTIFICATE_PRIVATE_KEY_B64"      | base64 --decode > cert_win.key
+
+          # strip Windows CRs -> clean LF PEMs
+          tr -d '\r' < asc_key_win.p8 > asc_key.p8
+          tr -d '\r' < cert_win.key  > cert.key
+
+          # sanity: show headers only
           head -1 asc_key.p8; tail -1 asc_key.p8
-          echo "Certificate Key headers:"
           head -1 cert.key;   tail -1 cert.key
-          # Verify file sizes (should be non-zero)
-          echo "ASC key size: $(wc -c < asc_key.p8) bytes"
-          echo "Cert key size: $(wc -c < cert.key) bytes"
-          
-      # 2) Fetch signing files using ASC (creates cert + profile)
+
+          # export for CLI (reads APP_STORE_CONNECT_PRIVATE_KEY from env)
+          export APP_STORE_CONNECT_PRIVATE_KEY="$(cat asc_key.p8)"
+          export CERTIFICATE_PRIVATE_KEY="$(cat cert.key)"
+
       - name: "Fetch signing files from App Store Connect"
         script: |
           set -euo pipefail
           : "${APP_STORE_CONNECT_ISSUER_ID:?missing}"
           : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?missing}"
-          
-          echo "Running app-store-connect fetch-signing-files with:"
-          echo "Bundle ID: $BUNDLE_ID"
-          echo "Issuer ID: $APP_STORE_CONNECT_ISSUER_ID"
-          echo "Key ID: $APP_STORE_CONNECT_KEY_IDENTIFIER"
-          
-          # Try with file path instead of @ syntax
+          : "${APP_STORE_CONNECT_PRIVATE_KEY:?missing}"
+          : "${CERTIFICATE_PRIVATE_KEY:?missing}"
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
             --issuer-id "$APP_STORE_CONNECT_ISSUER_ID" \
-            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER" \
-            --private-key asc_key.p8 \
-            --certificate-key cert.key
-            
-      # 3) (Optional) CocoaPods
+            --key-id "$APP_STORE_CONNECT_KEY_IDENTIFIER"
+
       - name: "Resolve dependencies (CocoaPods)"
         script: |
           if [ -f "Podfile" ]; then
             pod repo update
             pod install
           fi
-          
-      # 4) Build and export IPA
+
       - name: "Build and export IPA"
         script: |
           set -euo pipefail
@@ -79,6 +76,7 @@ workflows:
               --archive-configuration "Release" \
               --export-method "$EXPORT_METHOD"
           fi
+
     artifacts:
       - "$CM_EXPORT_DIR/*.ipa"
       - "$CM_EXPORT_DIR/*.dSYM.zip"

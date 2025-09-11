@@ -5,12 +5,12 @@ workflows:
       xcode: 16.4
       cocoapods: default
       groups:
-        - appstore     # must contain: APP_STORE_CONNECT_PRIVATE_KEY_B64, CERTIFICATE_PRIVATE_KEY_B64, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER
+        - appstore   # APP_STORE_CONNECT_PRIVATE_KEY_B64, CERTIFICATE_PRIVATE_KEY_B64, APP_STORE_CONNECT_ISSUER_ID, APP_STORE_CONNECT_KEY_IDENTIFIER
       vars:
-        BUNDLE_ID: "com.your.real.bundleid"    # <-- set this to your app's bundle id
-        XCODE_PROJECT: "YourApp.xcworkspace"   # or "YourApp.xcodeproj" if you DON'T use CocoaPods
-        XCODE_SCHEME: "YourScheme"             # shared scheme name
-        EXPORT_METHOD: "app-store"             # app-store | ad-hoc | development | enterprise
+        BUNDLE_ID: "com.globalytix.app"
+        XCODE_PROJECT: "YourApp.xcworkspace"   # or "YourApp.xcodeproj" if no CocoaPods
+        XCODE_SCHEME: "YourScheme"
+        EXPORT_METHOD: "app-store"
 
     cache:
       cache_paths:
@@ -18,40 +18,45 @@ workflows:
         - "~/Library/Developer/Xcode/DerivedData"
 
     scripts:
+      - name: "Sanity: YAML loaded + vars"
+        script: |
+          set -euo pipefail
+          echo "Branch: ${CM_BRANCH:-<unknown>}"
+          echo "BUNDLE_ID=$BUNDLE_ID"
+          echo "XCODE_PROJECT=$XCODE_PROJECT"
+          echo "XCODE_SCHEME=$XCODE_SCHEME"
+          for v in APP_STORE_CONNECT_PRIVATE_KEY_B64 CERTIFICATE_PRIVATE_KEY_B64 APP_STORE_CONNECT_ISSUER_ID APP_STORE_CONNECT_KEY_IDENTIFIER; do
+            [ -n "${!v:-}" ] || { echo "Missing required variable: $v"; exit 1; }
+          done
+
       - name: "Decode keys (normalize) + fetch signing files"
         script: |
           set -euo pipefail
-
-          # ---- required env from group: appstore ----
           : "${APP_STORE_CONNECT_PRIVATE_KEY_B64:?missing APP_STORE_CONNECT_PRIVATE_KEY_B64}"
           : "${CERTIFICATE_PRIVATE_KEY_B64:?missing CERTIFICATE_PRIVATE_KEY_B64}"
           : "${APP_STORE_CONNECT_ISSUER_ID:?missing APP_STORE_CONNECT_ISSUER_ID}"
           : "${APP_STORE_CONNECT_KEY_IDENTIFIER:?missing APP_STORE_CONNECT_KEY_IDENTIFIER}"
-          : "${BUNDLE_ID:?missing BUNDLE_ID}"
 
-          # Decode from base64 to files
+          # 1) Decode to files
           echo "$APP_STORE_CONNECT_PRIVATE_KEY_B64" | base64 --decode > asc_key_win.p8
           echo "$CERTIFICATE_PRIVATE_KEY_B64"      | base64 --decode > cert_win.key
 
-          # Strip Windows CRs -> produce clean LF PEMs
+          # 2) Normalize CRLF -> LF
           tr -d '\r' < asc_key_win.p8 > asc_key.p8
           tr -d '\r' < cert_win.key  > cert.key
 
-          # Validate headers and size (fail early with clear messages)
+          # 3) Fix glued PEMs (END...BEGIN) and ensure trailing newline (python -c one-liner)
+          python3 -c "import re,sys; p=open('asc_key.p8','rb').read().decode('utf-8','ignore'); p=re.sub(r'-----END PRIVATE KEY-----\\s*-----BEGIN','-----END PRIVATE KEY-----\\n-----BEGIN',p); open('asc_key.p8','wb').write((p.rstrip('\\n')+'\\n').encode()); k=open('cert.key','rb').read().decode('utf-8','ignore'); open('cert.key','wb').write((k.rstrip('\\n')+'\\n').encode())"
+
+          # 4) Validate headers (fixed-string grep)
           head -2 asc_key.p8; tail -2 asc_key.p8
           head -2 cert.key;   tail -2 cert.key
+          head -1 asc_key.p8 | grep -Fxq -- "-----BEGIN PRIVATE KEY-----"      || { echo "asc_key.p8: missing BEGIN PRIVATE KEY"; exit 1; }
+          tail -1 asc_key.p8 | grep -Fxq -- "-----END PRIVATE KEY-----"        || { echo "asc_key.p8: missing END PRIVATE KEY";   exit 1; }
+          head -1 cert.key   | grep -Fxq -- "-----BEGIN RSA PRIVATE KEY-----"  || { echo "cert.key:   missing BEGIN RSA PRIVATE KEY"; exit 1; }
+          tail -1 cert.key   | grep -Fxq -- "-----END RSA PRIVATE KEY-----"    || { echo "cert.key:   missing END RSA PRIVATE KEY";   exit 1; }
 
-          grep -qx "-----BEGIN PRIVATE KEY-----"       <(head -1 asc_key.p8) || { echo "asc_key.p8: missing BEGIN PRIVATE KEY"; exit 1; }
-          grep -qx "-----END PRIVATE KEY-----"         <(tail -1 asc_key.p8) || { echo "asc_key.p8: missing END PRIVATE KEY";   exit 1; }
-          grep -qx "-----BEGIN RSA PRIVATE KEY-----"   <(head -1 cert.key)   || { echo "cert.key:   missing BEGIN RSA PRIVATE KEY"; exit 1; }
-          grep -qx "-----END RSA PRIVATE KEY-----"     <(tail -1 cert.key)   || { echo "cert.key:   missing END RSA PRIVATE KEY";   exit 1; }
-
-          P8_BYTES=$(wc -c < asc_key.p8 | tr -d ' ')
-          RSA_BYTES=$(wc -c < cert.key | tr -d ' ')
-          [ "$P8_BYTES"  -gt 500 ] || { echo "asc_key.p8 too small -> wrong .p8 base64"; exit 1; }
-          [ "$RSA_BYTES" -gt 500 ] || { echo "cert.key too small -> wrong RSA base64";  exit 1; }
-
-          # Fetch signing files (creates Apple Distribution cert + provisioning profile)
+          # 5) Fetch cert + provisioning profile (auto-create)
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create \
@@ -65,7 +70,6 @@ workflows:
           if [ -f "Podfile" ]; then
             pod repo update
             pod install
-            # If you installed pods, XCODE_PROJECT must be the .xcworkspace
           fi
 
       - name: "Build and export IPA"
